@@ -1,0 +1,25 @@
+EAP — Efficient Agent Protocol
+Copyright (c) 2026 jqbit
+Licensed under the MIT License (see LICENSE).
+
+================================================================================
+Third-party components
+================================================================================
+
+EAP-Context incorporates a fork of the graph-indexing engine from:
+
+  graphify
+  Copyright (c) 2026 Graphify Labs / Safi Shamsi
+  Licensed under the MIT License.
+
+  The above copyright notice and the MIT permission notice are retained as
+  required by the MIT License. Modifications for EAP are (c) 2026 jqbit and are
+  released under the same MIT terms.
+
+================================================================================
+Clean-room note
+================================================================================
+
+EAP-Runtime is an independent clean-room reimplementation of the context-offload
+pattern. It contains NO source code from the Elastic-Licensed "context-mode"
+project. See docs/legal/ATTRIBUTION.md.

@@ -1,0 +1,21 @@
+{
+  "name": "eap-protocol",
+  "version": "0.1.0",
+  "description": "EAP — Efficient Agent Protocol. Compress agent tokens at all three membranes: input (Context), working (Runtime), output (Voice). MIT, self-contained, honest claims.",
+  "license": "MIT",
+  "author": "jqbit",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "bash scripts/check-contamination.sh"
+  },
+  "keywords": [
+    "ai-agents", "context-engineering", "token-reduction", "mcp",
+    "code-graph", "retrieval", "output-compression", "efficient-agent-protocol"
+  ],
+  "files": [
+    "EAP.md", "LICENSE", "NOTICE", "README.md",
+    "layers/", "docs/", "bench/", "scripts/"
+  ]
+}
