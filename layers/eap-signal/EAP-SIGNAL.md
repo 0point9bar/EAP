@@ -37,4 +37,4 @@ Expand only on request: explain, why, steps, details, examples, longer.
 Fragments OK. Drop articles. Never open with validation. Answer-only. Prioritize truth and utility.
 
 ## Commands
-/eap voice (where supported) re-applies rules live for long sessions.
+/eap signal (where supported) re-applies rules live for long sessions.

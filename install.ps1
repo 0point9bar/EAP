@@ -32,7 +32,7 @@ if ($nodeMajor -lt 22) {
   Fail "EAP needs Node.js >= 22 (found $(node -v)). Upgrade: winget upgrade OpenJS.NodeJS"
 }
 if (-not (Get-Command python3 -ErrorAction SilentlyContinue) -and -not (Get-Command python -ErrorAction SilentlyContinue)) {
-  Warn '  note: python not found — the EAP-Context graph layer needs it (Voice + Runtime still work; use --no-context to skip).'
+  Warn '  note: python not found — the EAP-Context graph layer needs it (Signal + Runtime still work; use --no-context to skip).'
 }
 
 # Fetch or update the repo. On PowerShell 7.4+, $PSNativeCommandUseErrorActionPreference

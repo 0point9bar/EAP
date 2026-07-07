@@ -1,4 +1,4 @@
-# EAP-Voice — output compression (shipping)
+# EAP-Signal — output compression (shipping)
 
 Verdict-first response style. Cuts filler, preamble, hedging, and validation
 from the model's prose **output** while keeping code, commands, errors, paths,
@@ -11,7 +11,7 @@ caveman by Julius Brussee. See `../../docs/legal/ATTRIBUTION.md`.
 
 ## Files
 
-- `EAP-VOICE.md` — the canonical prompt (drop into any agent's memory/rules file).
+- `EAP-SIGNAL.md` — the canonical prompt (drop into any agent's memory/rules file).
 
 ## Levels
 

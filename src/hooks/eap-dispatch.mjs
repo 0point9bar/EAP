@@ -3,7 +3,7 @@
 // Wired into the agent's hook settings by bin/eap-install.mjs. One file handles
 // every event so a single settings.json edit covers the whole lifecycle:
 //
-//   SessionStart  -> emit the Voice rules, (if Runtime installed) the last
+//   SessionStart  -> emit the Signal rules, (if Runtime installed) the last
 //                    session resume snapshot, and a Context-graph availability
 //                    note.
 //   PreToolUse    -> nudge toward eap_graph_query before a large raw read.
@@ -45,7 +45,7 @@ const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Cat', 'View']);
 // ── pure dispatcher ─────────────────────────────────────────────────────────
 // (event, parsed-hook-input, deps) -> result object. Always returns an object
 // carrying at least `{ event }`; never throws. deps:
-//   voiceRules       string  — the EAP-Voice rule text (SessionStart)
+//   signalRules       string  — the EAP-Signal rule text (SessionStart)
 //   runtime          { store, session } | null — injected Runtime modules
 //   contextAvailable boolean — is the eap-context graph MCP registered?
 //   threshold        number  — offload byte threshold (PostToolUse)
@@ -60,7 +60,7 @@ export async function dispatch(event, input, deps = {}) {
     case 'SessionStart':
       return safe(() => {
         const parts = [];
-        if (deps.voiceRules) parts.push(String(deps.voiceRules));
+        if (deps.signalRules) parts.push(String(deps.signalRules));
         if (runtime && runtime.session) {
           const snap = runtime.session.restore();
           if (snap && snap.body) parts.push('## EAP-Runtime resume (last session)\n\n' + snap.body);
@@ -157,14 +157,14 @@ async function run() {
     if (raw && raw.trim()) { try { input = JSON.parse(raw); } catch { input = {}; } }
     const ev = event || input.hook_event_name || '';
 
-    let voiceRules = '';
+    let signalRules = '';
     if (ev === 'SessionStart') {
-      try { voiceRules = fs.readFileSync(path.join(cfg.root, 'layers', 'eap-voice', 'EAP-VOICE.md'), 'utf8').trim(); } catch { /* optional */ }
+      try { signalRules = fs.readFileSync(path.join(cfg.root, 'layers', 'eap-signal', 'EAP-SIGNAL.md'), 'utf8').trim(); } catch { /* optional */ }
     }
     if (ev === 'SessionStart' || ev === 'PostToolUse' || ev === 'PreCompact') runtime = await buildRuntime(cfg);
 
     const result = await dispatch(ev, input, {
-      voiceRules,
+      signalRules,
       runtime,
       contextAvailable: !!cfg.context,
       now: () => Date.now(),

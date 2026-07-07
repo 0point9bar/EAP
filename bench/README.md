@@ -19,7 +19,7 @@ if any arm loses a task's checkable answer.
 Input-membrane tokens: the text each strategy would place in an agent's
 context to answer each task in `tasks.json`, plus `task_success` — whether
 the task's checkable answer string survives into that text. This harness
-measures **one membrane only**. Working (Runtime) and output (Voice) savings
+measures **one membrane only**. Working (Runtime) and output (Signal) savings
 are not measured here and are **never multiplied** with these numbers; no
 compounded headline exists anywhere in this repo.
 

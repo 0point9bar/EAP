@@ -23,7 +23,7 @@ None of these are reproduced in EAP. We publish only what `bench/` reproduces.
    grep-and-read agent — not `B0`, the dump-everything strawman. `B0` may be
    reported for context but is **always explicitly labeled a strawman**.
 2. **Per-layer, never multiplied.** Report input-token savings (Context),
-   working-token savings (Runtime), and output-token savings (Voice)
+   working-token savings (Runtime), and output-token savings (Signal)
    **separately**. Never multiply the three percentages into one compounded
    headline — the membranes are independent, and a product-of-percentages
    number is meaningless.

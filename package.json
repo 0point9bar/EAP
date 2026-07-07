@@ -1,7 +1,7 @@
 {
   "name": "eap-protocol",
   "version": "0.1.0",
-  "description": "EAP — Efficient Agent Protocol. Compress agent tokens at all three membranes: input (Context), working (Runtime), output (Voice). MIT, self-contained, honest claims.",
+  "description": "EAP — Efficient Agent Protocol. Compress agent tokens at all three membranes: input (Context), working (Runtime), output (Signal). MIT, self-contained, honest claims.",
   "license": "MIT",
   "author": "jqbit",
   "type": "module",

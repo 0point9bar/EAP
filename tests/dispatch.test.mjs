@@ -15,14 +15,14 @@ function mkRuntime() {
   return { store, session };
 }
 
-test('SessionStart emits the Voice rules (plus the Context-graph note when available)', async () => {
+test('SessionStart emits the Signal rules (plus the Context-graph note when available)', async () => {
   const runtime = mkRuntime();
   const r = await dispatch('SessionStart', {}, {
-    voiceRules: 'VOICE-RULES-MARKER: verdict first, filler never.',
+    signalRules: 'SIGNAL-RULES-MARKER: verdict first, filler never.',
     runtime, contextAvailable: true, now: () => 1,
   });
   assert.equal(r.event, 'SessionStart');
-  assert.match(r.additionalContext, /VOICE-RULES-MARKER/);
+  assert.match(r.additionalContext, /SIGNAL-RULES-MARKER/);
   assert.match(r.additionalContext, /eap_graph_query/);
   runtime.store.close();
 });
@@ -31,7 +31,7 @@ test('SessionStart rehydrates the last Runtime snapshot when one exists', async 
   const runtime = mkRuntime();
   runtime.session.append({ ts: 1, kind: 'decision', summary: 'RESUME-DECISION-42 ship the pointer format' });
   runtime.session.snapshot({ ts: 2 });
-  const r = await dispatch('SessionStart', {}, { voiceRules: 'V', runtime, contextAvailable: false, now: () => 3 });
+  const r = await dispatch('SessionStart', {}, { signalRules: 'V', runtime, contextAvailable: false, now: () => 3 });
   assert.match(r.additionalContext, /RESUME-DECISION-42/);
   assert.match(r.additionalContext, /EAP-Runtime resume/);
   runtime.store.close();

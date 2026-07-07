@@ -7,7 +7,7 @@ zero-dependency product.
 
 EAP is the "parent" build-out of the [TLDR](https://github.com/jqbit/TLDR)
 philosophy: TLDR is the minimal-invasion output-only child; EAP embeds TLDR as
-its Voice layer and adds two more. Keep changes small and focused; a tight PR
+its Signal layer and adds two more. Keep changes small and focused; a tight PR
 beats a big rewrite.
 
 ---
@@ -16,7 +16,7 @@ beats a big rewrite.
 
 | Layer | Membrane | What it is | Source |
 |---|---|---|---|
-| **EAP-Voice** | output | verdict-first prose (the TLDR ruleset) — prompt-only, always-on | `layers/eap-voice/EAP-VOICE.md` |
+| **EAP-Signal** | output | verdict-first prose (the TLDR ruleset) — prompt-only, always-on | `layers/eap-signal/EAP-SIGNAL.md` |
 | **EAP-Runtime** | working | "think in code": run a script in a subprocess, return only summary stdout; auto-offload big output behind a searchable pointer | `layers/eap-runtime/src/*.mjs` |
 | **EAP-Context** | input | local code-symbol graph → inject a subgraph + `file:line` pointers instead of whole files | `layers/eap-context/src/eap_context/*.py` |
 
@@ -45,7 +45,7 @@ skill stack inherited from TLDR.
 
 | Change | Edit |
 |---|---|
-| Voice output rules | `layers/eap-voice/EAP-VOICE.md` |
+| Signal output rules | `layers/eap-signal/EAP-SIGNAL.md` |
 | Runtime executor / store / MCP | `layers/eap-runtime/src/{executor,store,session,mcp}.mjs` |
 | Context extractor / graph / query / MCP | `layers/eap-context/src/eap_context/{extract,graph,query,mcp}.py` |
 | Installer + provider wiring | `bin/eap-install.mjs` |
@@ -54,7 +54,7 @@ skill stack inherited from TLDR.
 
 ## Adding an agent
 
-`bin/eap-install.mjs` carries a `PROVIDERS` table. EAP-Voice installs natively
+`bin/eap-install.mjs` carries a `PROVIDERS` table. EAP-Signal installs natively
 into an agent's global rules file (the same AGENTS.md-convention paths TLDR
 uses); the Runtime + Context MCP servers register with MCP-capable agents.
 Wire a new agent by adding its rules-file path and MCP-config mechanism — do

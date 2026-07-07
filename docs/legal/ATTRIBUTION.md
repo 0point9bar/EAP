@@ -5,7 +5,7 @@ maintained solely by [jqbit](https://github.com/jqbit). It is a self-contained
 hard fork/freeze with no upstream runtime dependency. This file records the
 lineage of every idea and every line of third-party code, per layer.
 
-## EAP-Voice (output compression)
+## EAP-Signal (output compression)
 
 Descends from **TLDR** (jqbit, MIT), which itself derives — with attribution —
 from **caveman** by Julius Brussee (MIT) and jqbit's earlier TAUT→STFU→blunt
@@ -17,7 +17,7 @@ design (drop the persona, keep the compression) is documented in TLDR's
 - **ponytail** by Dietrich Gebert — https://github.com/DietrichGebert/ponytail — MIT.
   EAP borrows ponytail's *concept* of a code-brevity discipline (the "ladder":
   YAGNI → reuse → stdlib → native → dep → one line → minimum) as an optional
-  Voice sub-mode. Concept only; no ponytail source is used.
+  Signal sub-mode. Concept only; no ponytail source is used.
 
 ## EAP-Context (input / retrieval)
 

@@ -10,7 +10,7 @@ and every crossing is a cost to justify:
 |---|---|---|---|
 | **Input / retrieval** | reference material loaded *into* context before reasoning | **EAP-Context** | code-symbol graph routing + lexical blob index → inject a small subgraph and `file:line` pointers instead of dumping files |
 | **Working / tool** | tool output accreting *during* the turn (logs, API blobs, stdout) | **EAP-Runtime** | "think in code": run a script in a subprocess, return only summary stdout; auto-offload large output into a local index behind a searchable pointer; persist state across compaction |
-| **Output / generation** | model prose emitted *back* to the user | **EAP-Voice** | verdict-first prose; cut filler while preserving code, paths, and safety-critical text |
+| **Output / generation** | model prose emitted *back* to the user | **EAP-Signal** | verdict-first prose; cut filler while preserving code, paths, and safety-critical text |
 
 The three are **one product**, not three plugins, because they share a
 substrate: a local, deterministic, **no-LLM / no-network** index rooted under a
@@ -26,12 +26,12 @@ opt-out**.
 
 ## The three layers
 
-### EAP-Voice (output) — active by default
+### EAP-Signal (output) — active by default
 Verdict-first response style. Cuts filler, preamble, hedging, and validation
 while keeping code, commands, errors, paths, and safety text byte-exact. Six
 intensity levels (lite / full / ultra plus three Classical-Chinese *wenyan*
 tiers). This layer is the perfected TLDR prompt; it is prompt-only and needs no
-runtime. See `layers/eap-voice/`.
+runtime. See `layers/eap-signal/`.
 
 ### EAP-Context (input) — opt-in
 A local code-symbol graph (Python-stdlib `ast` for Python plus lightweight
@@ -51,7 +51,7 @@ pattern (see `docs/legal/ATTRIBUTION.md`). See `layers/eap-runtime/`.
 ## Composition rules
 
 - Gains are **additive across independent membranes** — input reduced by graph
-  routing, working reduced by execution offload, output reduced by voice.
+  routing, working reduced by execution offload, output reduced by signal.
 - Gains are **measured and reported separately per layer**. They are **never
   multiplied** into a single compounded headline number.
 - Every reduction claim is reproducible from the committed `bench/` harness

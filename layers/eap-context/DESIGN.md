@@ -57,7 +57,7 @@ hard-freeze choice: it keeps EAP's supply-chain surface at zero. See
 ## Runtime & dependencies
 
 Python 3 standard library only — **zero third-party dependencies**. The layer
-is optional and independently installable; EAP-Voice and EAP-Runtime work
+is optional and independently installable; EAP-Signal and EAP-Runtime work
 without it.
 
 ## Correctness & safety

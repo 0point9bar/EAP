@@ -9,7 +9,7 @@
 //                skipped with "is not a JSON object" — never a crash, never a
 //                false "registered"/"wired". A non-array `hooks` field is
 //                handled without a TypeError.
-//   2 BLOCKER  — an orphan eap-voice BEGIN marker no longer swallows the user
+//   2 BLOCKER  — an orphan eap-signal BEGIN marker no longer swallows the user
 //                text below it on the 2nd install (nearest-preceding pairing).
 //   3 MAJOR    — an end-before-begin marker sequence makes install idempotent
 //                (no unbounded growth) rather than appending a block every run.
@@ -38,8 +38,8 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const BIN = join(here, '..', 'bin', 'eap-install.mjs');
 
-const VOICE_BEGIN = '<!-- eap-voice:begin -->';
-const VOICE_END = '<!-- eap-voice:end -->';
+const SIGNAL_BEGIN = '<!-- eap-signal:begin -->';
+const SIGNAL_END = '<!-- eap-signal:end -->';
 
 function mkTmp(tag) { return mkdtempSync(join(tmpdir(), `eap-acid-${tag}-`)); }
 function run(args, env) { return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env }); }
@@ -128,16 +128,16 @@ test('FIX1: settings.json whose `hooks` field is a non-array is wired without a 
 });
 
 // ── FINDING 2: orphan BEGIN must not eat the user text below it ───────────────
-test('FIX2: an orphan eap-voice BEGIN keeps the user text below it across a 2nd install', () => {
+test('FIX2: an orphan eap-signal BEGIN keeps the user text below it across a 2nd install', () => {
   const { home, dir, env } = claudeSandbox('orphan-begin');
   try {
     const md = join(dir, 'CLAUDE.md');
-    writeFileSync(md, `TOP LINE\n${VOICE_BEGIN}\nORPHAN USER BODY\n`);
+    writeFileSync(md, `TOP LINE\n${SIGNAL_BEGIN}\nORPHAN USER BODY\n`);
     const flags = ['--only', 'claude', '--config-dir', dir, '--no-runtime', '--no-context', '--non-interactive', '--no-color'];
 
     assert.equal(run(flags, env).status, 0);
     // Install appended a real block -> two BEGIN markers now (orphan + real).
-    assert.equal(countOf(readFileSync(md, 'utf8'), VOICE_BEGIN), 2, 'setup: expected two BEGIN markers after 1st install');
+    assert.equal(countOf(readFileSync(md, 'utf8'), SIGNAL_BEGIN), 2, 'setup: expected two BEGIN markers after 1st install');
 
     assert.equal(run(flags, env).status, 0);            // 2nd install
     const after = readFileSync(md, 'utf8');
@@ -151,18 +151,18 @@ test('FIX3: an end-before-begin marker sequence makes install idempotent (no unb
   const { home, dir, env } = claudeSandbox('ebb');
   try {
     const md = join(dir, 'CLAUDE.md');
-    writeFileSync(md, `USER A\n${VOICE_END}\nUSER B\n${VOICE_BEGIN}\nUSER C\n`);
+    writeFileSync(md, `USER A\n${SIGNAL_END}\nUSER B\n${SIGNAL_BEGIN}\nUSER C\n`);
     const flags = ['--only', 'claude', '--config-dir', dir, '--no-runtime', '--no-context', '--non-interactive', '--no-color'];
 
     assert.equal(run(flags, env).status, 0);
-    const b1 = countOf(readFileSync(md, 'utf8'), VOICE_BEGIN);
+    const b1 = countOf(readFileSync(md, 'utf8'), SIGNAL_BEGIN);
     assert.equal(run(flags, env).status, 0);
     const t2 = readFileSync(md, 'utf8');
     assert.equal(run(flags, env).status, 0);
     const t3 = readFileSync(md, 'utf8');
 
     assert.equal(t2, t3, 'reinstall keeps appending a fresh block (not idempotent)');
-    assert.equal(countOf(t3, VOICE_BEGIN), b1, 'BEGIN markers grew across reinstalls');
+    assert.equal(countOf(t3, SIGNAL_BEGIN), b1, 'BEGIN markers grew across reinstalls');
     assert.ok(t3.includes('USER A') && t3.includes('USER B') && t3.includes('USER C'), 'user text lost');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -172,14 +172,14 @@ test('FIX4: two complete blocks collapse to one on install and both are removed 
   const { home, dir, env } = claudeSandbox('twoblock');
   try {
     const md = join(dir, 'CLAUDE.md');
-    const two = `HEAD USER\n${VOICE_BEGIN}\nOLD ONE\n${VOICE_END}\nMID USER\n${VOICE_BEGIN}\nOLD TWO\n${VOICE_END}\nTAIL USER\n`;
+    const two = `HEAD USER\n${SIGNAL_BEGIN}\nOLD ONE\n${SIGNAL_END}\nMID USER\n${SIGNAL_BEGIN}\nOLD TWO\n${SIGNAL_END}\nTAIL USER\n`;
     const flags = ['--only', 'claude', '--config-dir', dir, '--no-runtime', '--no-context', '--non-interactive', '--no-color'];
 
     // Install collapses the two blocks into one refreshed block.
     writeFileSync(md, two);
     assert.equal(run(flags, env).status, 0);
     const after = readFileSync(md, 'utf8');
-    assert.equal(countOf(after, VOICE_BEGIN), 1, 'blocks were not collapsed to one');
+    assert.equal(countOf(after, SIGNAL_BEGIN), 1, 'blocks were not collapsed to one');
     assert.ok(!after.includes('OLD ONE') && !after.includes('OLD TWO'), 'a stale block survived install');
     assert.ok(after.includes('HEAD USER') && after.includes('MID USER') && after.includes('TAIL USER'), 'user text lost on install');
 
@@ -187,8 +187,8 @@ test('FIX4: two complete blocks collapse to one on install and both are removed 
     writeFileSync(md, two);
     assert.equal(run(['--uninstall', '--config-dir', dir, '--non-interactive', '--no-color'], env).status, 0);
     const stripped = readFileSync(md, 'utf8');
-    assert.equal(countOf(stripped, VOICE_BEGIN), 0, 'a BEGIN marker survived uninstall');
-    assert.equal(countOf(stripped, VOICE_END), 0, 'an END marker survived uninstall');
+    assert.equal(countOf(stripped, SIGNAL_BEGIN), 0, 'a BEGIN marker survived uninstall');
+    assert.equal(countOf(stripped, SIGNAL_END), 0, 'an END marker survived uninstall');
     assert.ok(stripped.includes('HEAD USER') && stripped.includes('MID USER') && stripped.includes('TAIL USER'), 'user text lost on uninstall');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -214,7 +214,7 @@ test('FIX5: a read-only rules dir fails that agent gracefully; the next agent is
     // grok comes AFTER codex — it must still have been processed and written.
     const grokRules = join(home, '.grok', 'AGENTS.md');
     assert.ok(existsSync(grokRules), 'the next agent (grok) was skipped after codex aborted');
-    assert.match(readFileSync(grokRules, 'utf8'), /eap-voice:begin/, 'grok Voice block not written');
+    assert.match(readFileSync(grokRules, 'utf8'), /eap-signal:begin/, 'grok Signal block not written');
   } finally {
     try { chmodSync(codexDir, 0o700); } catch { /* best effort */ }
     rmSync(home, { recursive: true, force: true });

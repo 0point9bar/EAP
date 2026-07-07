@@ -16,7 +16,7 @@ token lifecycle**, where every other tool addresses only one:
 - **EAP-Runtime** trims the tokens that accrete **during** the turn (tool
   output): "think in code" — run a script, return only its summary; auto-index
   oversized output behind a searchable pointer.
-- **EAP-Voice** trims the tokens that flow **out** (prose): verdict-first
+- **EAP-Signal** trims the tokens that flow **out** (prose): verdict-first
   answers that keep code, paths, and safety text byte-exact.
 
 One installer, one hook dispatcher, one skill format, three compression gates.
@@ -25,10 +25,10 @@ One installer, one hook dispatcher, one skill format, three compression gates.
 
 | Layer | State | Notes |
 |---|---|---|
-| **EAP-Voice** | **shipping** | The perfected TLDR prompt/skill. Prompt-only, so it applies to any agent; the installer writes it **natively** for Claude Code + 7 native agents (see `--list`). |
+| **EAP-Signal** | **shipping** | The perfected TLDR prompt/skill. Prompt-only, so it applies to any agent; the installer writes it **natively** for Claude Code + 7 native agents (see `--list`). |
 | **EAP-Runtime** | **built** (clean-room) | Executor ("think in code"), session event log + snapshot/restore, offload store, JSON-RPC 2.0 stdio MCP server. |
 | **EAP-Context** | **built** (stdlib-only) | Symbol-graph engine (Python `ast` + JS/TS extraction), query with pointers, CLI + stdio MCP server. 9 Python tests green (`npm run test:py`). |
-| **Installer** | **built** | `bin/eap-install.mjs` — one command wires all three layers (Voice rule + both MCP servers + hook dispatcher). **End-to-end for Claude Code**; **6 native agents** (codex, grok, hermes, cursor, antigravity, opencode) get the EAP-Voice rule **and** both EAP MCP servers registered natively; **pi** gets EAP-Voice only (Pi has no MCP); every remaining roster entry is detected + given an honest manual plan (`--list`). 92 node tests green (`npm test`). |
+| **Installer** | **built** | `bin/eap-install.mjs` — one command wires all three layers (Signal rule + both MCP servers + hook dispatcher). **End-to-end for Claude Code**; **6 native agents** (codex, grok, hermes, cursor, antigravity, opencode) get the EAP-Signal rule **and** both EAP MCP servers registered natively; **pi** gets EAP-Signal only (Pi has no MCP); every remaining roster entry is detected + given an honest manual plan (`--list`). 92 node tests green (`npm test`). |
 | **Bench** | **built** | Deterministic harness over a committed 82 KB corpus; 6 fixed tasks, B2 vs honest grep baseline B1: 37.3% aggregate token reduction, task success 6/6 (`npm run bench`). |
 
 See `docs/ARCHITECTURE.md` for the full design and `EAP.md` for the protocol.
@@ -49,7 +49,7 @@ irm https://raw.githubusercontent.com/jqbit/EAP/main/install.ps1 | iex
 
 Either bootstrap checks git + Node ≥ 22, clones the repo, and launches an
 **interactive TUI** — it auto-detects your installed agents and lets you pick
-which agents and which layers (Voice / Runtime / Context) to wire. The TUI
+which agents and which layers (Signal / Runtime / Context) to wire. The TUI
 reads from your terminal even through `curl | bash`. To skip the prompts in
 automation, append flags: `… | bash -s -- --only claude --non-interactive`.
 
@@ -64,12 +64,12 @@ node bin/eap-install.mjs                          # interactive TUI (default on 
 node bin/eap-install.mjs --list                   # provider matrix: end-to-end vs planned
 node bin/eap-install.mjs --dry-run --only claude  # print the full plan, write nothing
 node bin/eap-install.mjs --only claude            # wire EAP into Claude Code (non-interactive)
-node bin/eap-install.mjs --uninstall              # remove Voice block + MCP entries + hooks
+node bin/eap-install.mjs --uninstall              # remove Signal block + MCP entries + hooks
 ```
 
 For **Claude Code** the installer is end-to-end. It:
 
-1. writes the **EAP-Voice** rule as a managed, marker-fenced block into
+1. writes the **EAP-Signal** rule as a managed, marker-fenced block into
    `<config-dir>/CLAUDE.md` (stripped cleanly on `--uninstall`, user content preserved);
 2. registers both MCP servers — **eap-runtime** (`node …/eap-runtime/src/mcp.mjs`) and
    **eap-context** (`python3 …/eap_context/mcp.py <project-root>`) — via `claude mcp add`
@@ -80,13 +80,13 @@ For **Claude Code** the installer is end-to-end. It:
 
 Beyond Claude Code, the installer also wires **native** agents:
 
-- **codex, grok, hermes, cursor, antigravity, opencode** — the **EAP-Voice** rule *and*
+- **codex, grok, hermes, cursor, antigravity, opencode** — the **EAP-Signal** rule *and*
   both **EAP MCP servers** (eap-runtime + eap-context) are registered natively, via each
   agent's MCP CLI (`codex`/`grok` `mcp add … -- <cmd>`, `hermes mcp add … --command <cmd> --args …`)
   or its MCP config file (`~/.cursor/mcp.json`, `~/.gemini/config/mcp_config.json`,
   `opencode.jsonc`). For these global registrations eap-context indexes the agent's runtime
-  cwd (no pinned project root). cursor's Voice rule is per-repo; its MCP is global.
-- **pi** — the EAP-Voice rule only. Pi ships npm extensions, not MCP.
+  cwd (no pinned project root). cursor's Signal rule is per-repo; its MCP is global.
+- **pi** — the EAP-Signal rule only. Pi ships npm extensions, not MCP.
 
 Every **remaining** provider (Gemini, Windsurf, Cline, …) is **detected and reported as
 `planned`** — the installer prints a per-agent manual plan and does **not** claim to have
@@ -103,7 +103,7 @@ from lossless retrieval with recall. Details: `docs/EFFICIENCY.md`.
 
 ## Ownership
 
-MIT, sole-maintained, self-contained. EAP-Voice and EAP-Runtime are original /
+MIT, sole-maintained, self-contained. EAP-Signal and EAP-Runtime are original /
 clean-room code; EAP-Context is concept-derived from MIT-licensed graphify
 (stdlib-only, no graphify code or dependencies used; notice retained). The
 Elastic-Licensed context-mode project is clean-room-reimplemented from concept
@@ -114,7 +114,7 @@ only — **zero source used**. Full provenance: `docs/legal/ATTRIBUTION.md`.
 ```text
 EAP/
 ├── EAP.md                     # the protocol
-├── layers/eap-voice/          # output compression (shipping — perfected TLDR)
+├── layers/eap-signal/          # output compression (shipping — perfected TLDR)
 ├── layers/eap-runtime/        # working/tool-output offload (clean-room)
 ├── layers/eap-context/        # input/retrieval symbol graph (stdlib, concept-derived)
 ├── docs/                      # ARCHITECTURE, EFFICIENCY, legal/

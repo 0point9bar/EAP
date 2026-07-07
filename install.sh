@@ -41,7 +41,7 @@ if [ "${NODE_MAJOR:-0}" -lt 22 ]; then
   warn "  Upgrade Node (nvm install 22 · brew upgrade node · winget upgrade OpenJS.NodeJS) and re-run."
   exit 1
 fi
-command -v python3 >/dev/null 2>&1 || warn "  note: python3 not found — the EAP-Context graph layer needs it (Voice + Runtime still work; re-run with --no-context to skip)."
+command -v python3 >/dev/null 2>&1 || warn "  note: python3 not found — the EAP-Context graph layer needs it (Signal + Runtime still work; re-run with --no-context to skip)."
 
 # Fetch or update the repo.
 if [ -d "$EAP_HOME/.git" ]; then

@@ -26,8 +26,8 @@ test('--list exits 0 and prints the provider matrix (claude end-to-end)', () => 
   assert.match(r.stdout, /claude/);
   assert.match(r.stdout, /end-to-end/);
   assert.match(r.stdout, /planned/);
-  // Native EAP-Voice agents render as "voice", not "planned".
-  assert.match(r.stdout, /voice/);
+  // Native EAP-Signal agents render as "signal", not "planned".
+  assert.match(r.stdout, /signal/);
   // The full provider roster is present.
   assert.match(r.stdout, /antigravity/);
 });
@@ -40,13 +40,13 @@ test('--help exits 0 and documents the flags', () => {
   assert.match(r.stdout, /--uninstall/);
 });
 
-test('--dry-run --only claude writes NOTHING and plans Voice + both MCP + hooks', () => {
+test('--dry-run --only claude writes NOTHING and plans Signal + both MCP + hooks', () => {
   const dir = mkTmp('dry');
   try {
     const r = run(['--dry-run', '--only', 'claude', '--config-dir', dir, '--non-interactive', '--no-color']);
     assert.equal(r.status, 0, r.stderr);
     // Plan mentions all three layers.
-    assert.match(r.stdout, /Voice/);
+    assert.match(r.stdout, /Signal/);
     assert.match(r.stdout, /eap-runtime/);
     assert.match(r.stdout, /eap-context/);
     assert.match(r.stdout, /SessionStart/);
@@ -59,7 +59,7 @@ test('--dry-run --only claude writes NOTHING and plans Voice + both MCP + hooks'
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('real --only claude install lands Voice block + both MCP entries + hooks, then uninstall reverses it while preserving user content', () => {
+test('real --only claude install lands Signal block + both MCP entries + hooks, then uninstall reverses it while preserving user content', () => {
   const dir = mkTmp('inst');
   try {
     // Seed pre-existing user content that MUST survive install + uninstall.
@@ -70,11 +70,11 @@ test('real --only claude install lands Voice block + both MCP entries + hooks, t
     const r = run(['--only', 'claude', '--config-dir', dir, '--non-interactive', '--no-color']);
     assert.equal(r.status, 0, r.stderr);
 
-    // 1. Voice block.
+    // 1. Signal block.
     const md = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
-    assert.match(md, /<!-- eap-voice:begin -->/);
-    assert.match(md, /<!-- eap-voice:end -->/);
-    assert.match(md, /Prime directive/);          // real EAP-VOICE.md content
+    assert.match(md, /<!-- eap-signal:begin -->/);
+    assert.match(md, /<!-- eap-signal:end -->/);
+    assert.match(md, /Prime directive/);          // real EAP-SIGNAL.md content
     assert.match(md, /KEEP-THIS-LINE/);            // user content preserved
 
     // 2. Both MCP servers in .mcp.json (config-dir pinned -> file mechanism).
@@ -105,7 +105,7 @@ test('real --only claude install lands Voice block + both MCP entries + hooks, t
     assert.equal(u.status, 0, u.stderr);
 
     const md2 = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
-    assert.doesNotMatch(md2, /eap-voice:begin/);   // block stripped
+    assert.doesNotMatch(md2, /eap-signal:begin/);   // block stripped
     assert.match(md2, /KEEP-THIS-LINE/);           // user content still there
 
     const settings2 = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
@@ -156,17 +156,17 @@ test('a planted CLAUDE.md symlink is not followed (atomic write, symlink-safe)',
 
     // The out-of-tree target must be untouched (symlink NOT followed)...
     assert.equal(readFileSync(target, 'utf8').trim(), 'ORIGINAL SECRET');
-    // ...and CLAUDE.md must now be a real file with the Voice block.
+    // ...and CLAUDE.md must now be a real file with the Signal block.
     assert.equal(lstatSync(join(cfgDir, 'CLAUDE.md')).isSymbolicLink(), false);
-    assert.match(readFileSync(join(cfgDir, 'CLAUDE.md'), 'utf8'), /eap-voice:begin/);
+    assert.match(readFileSync(join(cfgDir, 'CLAUDE.md'), 'utf8'), /eap-signal:begin/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
 });
 
-// ── native EAP-Voice agents ──────────────────────────────────────────────────
-// The non-Claude agents whose EAP-Voice rule installs natively into a global
+// ── native EAP-Signal agents ──────────────────────────────────────────────────
+// The non-Claude agents whose EAP-Signal rule installs natively into a global
 // always-on rules file. Every run is fully env-sandboxed (HOME / XDG_CONFIG_HOME
 // / HERMES_HOME / CLAUDE_CONFIG_DIR all point into a throwaway dir) so the real
 // user's ~/.codex, ~/.grok, etc. are NEVER touched.
@@ -192,7 +192,7 @@ function sandboxEnv(home) {
 }
 
 // Expected native rules-file path for an agent, given a sandbox env. Mirrors
-// resolveNativeVoice() in the installer.
+// resolveNativeSignal() in the installer.
 function nativePath(id, env) {
   switch (id) {
     case 'codex':       return join(env.HOME, '.codex', 'AGENTS.md');
@@ -206,7 +206,7 @@ function nativePath(id, env) {
 }
 
 for (const id of NATIVE_AGENTS) {
-  test(`native EAP-Voice: --only ${id} writes the eap-voice block into its global rules file`, () => {
+  test(`native EAP-Signal: --only ${id} writes the eap-signal block into its global rules file`, () => {
     const home = mkTmp(`nat-${id}`);
     const env = sandboxEnv(home);
     try {
@@ -215,16 +215,16 @@ for (const id of NATIVE_AGENTS) {
       const file = nativePath(id, env);
       assert.ok(existsSync(file), `${id}: rules file written at ${file}`);
       const txt = readFileSync(file, 'utf8');
-      assert.match(txt, /<!-- eap-voice:begin -->/, `${id}: begin marker`);
-      assert.match(txt, /<!-- eap-voice:end -->/, `${id}: end marker`);
-      assert.match(txt, /Prime directive/, `${id}: a real EAP-VOICE line`);
+      assert.match(txt, /<!-- eap-signal:begin -->/, `${id}: begin marker`);
+      assert.match(txt, /<!-- eap-signal:end -->/, `${id}: end marker`);
+      assert.match(txt, /Prime directive/, `${id}: a real EAP-SIGNAL line`);
       // Reported as installed, not planned.
       assert.match(r.stdout, new RegExp(id));
       assert.doesNotMatch(r.stdout, /PLANNED/);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-  test(`native EAP-Voice: --only ${id} is idempotent (one block, file unchanged on re-run)`, () => {
+  test(`native EAP-Signal: --only ${id} is idempotent (one block, file unchanged on re-run)`, () => {
     const home = mkTmp(`nat-idem-${id}`);
     const env = sandboxEnv(home);
     try {
@@ -234,12 +234,12 @@ for (const id of NATIVE_AGENTS) {
       assert.equal(run(['--only', id, '--non-interactive', '--no-color'], { env }).status, 0);
       const second = readFileSync(file, 'utf8');
       assert.equal(second, first, `${id}: file byte-identical after re-install`);
-      const begins = second.split('<!-- eap-voice:begin -->').length - 1;
-      assert.equal(begins, 1, `${id}: exactly one Voice block`);
+      const begins = second.split('<!-- eap-signal:begin -->').length - 1;
+      assert.equal(begins, 1, `${id}: exactly one Signal block`);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-  test(`native EAP-Voice: --uninstall strips ${id}'s block, preserving user content above/below`, () => {
+  test(`native EAP-Signal: --uninstall strips ${id}'s block, preserving user content above/below`, () => {
     const home = mkTmp(`nat-uninst-${id}`);
     const env = sandboxEnv(home);
     try {
@@ -249,19 +249,19 @@ for (const id of NATIVE_AGENTS) {
       writeFileSync(file, '# ABOVE-USER-LINE\n');
       assert.equal(run(['--only', id, '--non-interactive', '--no-color'], { env }).status, 0);
       writeFileSync(file, readFileSync(file, 'utf8') + '\n# BELOW-USER-LINE\n');
-      assert.match(readFileSync(file, 'utf8'), /eap-voice:begin/);
+      assert.match(readFileSync(file, 'utf8'), /eap-signal:begin/);
 
       const u = run(['--uninstall', '--non-interactive', '--no-color'], { env });
       assert.equal(u.status, 0, u.stderr);
       const after = readFileSync(file, 'utf8');
-      assert.doesNotMatch(after, /eap-voice:begin/, `${id}: block stripped`);
-      assert.doesNotMatch(after, /eap-voice:end/, `${id}: end marker stripped`);
+      assert.doesNotMatch(after, /eap-signal:begin/, `${id}: block stripped`);
+      assert.doesNotMatch(after, /eap-signal:end/, `${id}: end marker stripped`);
       assert.match(after, /ABOVE-USER-LINE/, `${id}: content above preserved`);
       assert.match(after, /BELOW-USER-LINE/, `${id}: content below preserved`);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-  test(`native EAP-Voice: --dry-run --only ${id} writes nothing`, () => {
+  test(`native EAP-Signal: --dry-run --only ${id} writes nothing`, () => {
     const home = mkTmp(`nat-dry-${id}`);
     const env = sandboxEnv(home);
     try {
@@ -273,7 +273,7 @@ for (const id of NATIVE_AGENTS) {
   });
 }
 
-test('native EAP-Voice: --only cursor writes NO global file, exits 0, prints the per-repo note', () => {
+test('native EAP-Signal: --only cursor writes NO global file, exits 0, prints the per-repo note', () => {
   const home = mkTmp('nat-cursor');
   const env = sandboxEnv(home);
   try {
@@ -432,7 +432,7 @@ for (const [id, flavor] of Object.entries(CLI_MCP_AGENTS)) {
     try {
       const r = run(['--only', id, '--non-interactive', '--no-color'], { env });
       assert.equal(r.status, 0, r.stderr);
-      // Voice still installed (fs only, PATH-independent).
+      // Signal still installed (fs only, PATH-independent).
       assert.match(r.stdout, new RegExp(id));
       // Manual fallback surfaced (bin not on PATH) with the copy-pasteable command.
       assert.match(r.stdout + r.stderr, /register manually|not found on PATH/i);

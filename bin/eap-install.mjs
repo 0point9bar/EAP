@@ -2,7 +2,7 @@
 // EAP — unified installer. Wires all three EAP layers into an AI coding agent in
 // one command:
 //
-//   1. EAP-Voice   — the always-on output-compression rule, written as a managed
+//   1. EAP-Signal   — the always-on output-compression rule, written as a managed
 //                    marker-fenced block into the agent's memory file (Claude
 //                    Code: <configDir>/CLAUDE.md).
 //   2. EAP-Runtime — the working-memory offload MCP server (node), registered
@@ -37,15 +37,29 @@ const __dirname = path.dirname(__filename);
 // bin/eap-install.mjs -> repo root is one level up.
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-// Absolute paths to the two MCP server entrypoints and the voice rule + hook.
+// Absolute paths to the two MCP server entrypoints and the signal rule + hook.
 const RUNTIME_MCP = path.join(REPO_ROOT, 'layers', 'eap-runtime', 'src', 'mcp.mjs');
 const CONTEXT_MCP = path.join(REPO_ROOT, 'layers', 'eap-context', 'src', 'eap_context', 'mcp.py');
-const VOICE_RULE = path.join(REPO_ROOT, 'layers', 'eap-voice', 'EAP-VOICE.md');
+const SIGNAL_RULE = path.join(REPO_ROOT, 'layers', 'eap-signal', 'EAP-SIGNAL.md');
 const HOOK_DISPATCH = path.join(REPO_ROOT, 'src', 'hooks', 'eap-dispatch.mjs');
 
-// Managed-block markers (Voice rule) and the hook idempotency marker.
-const VOICE_BEGIN = '<!-- eap-voice:begin -->';
-const VOICE_END = '<!-- eap-voice:end -->';
+// Managed-block markers (Signal rule) and the hook idempotency marker.
+const SIGNAL_BEGIN = '<!-- eap-signal:begin -->';
+const SIGNAL_END = '<!-- eap-signal:end -->';
+// Legacy markers from before the EAP-Voice → EAP-Signal rename. Still recognized
+// on UNINSTALL so an install made by an older build is cleaned up; never written.
+const LEGACY_SIGNAL_BEGIN = '<!-- eap-voice:begin -->';
+const LEGACY_SIGNAL_END = '<!-- eap-voice:end -->';
+
+// Strip the current AND legacy managed blocks from a rules-file body.
+function stripSignalBlocks(body) {
+  let touched = false;
+  let r = stripFencedBlock(body, SIGNAL_BEGIN, SIGNAL_END);
+  touched = touched || r.stripped;
+  r = stripFencedBlock(r.text, LEGACY_SIGNAL_BEGIN, LEGACY_SIGNAL_END);
+  touched = touched || r.stripped;
+  return { text: r.text, stripped: touched };
+}
 const HOOK_MARKER = 'eap-dispatch';
 
 // Claude Code hook events EAP wires (see src/hooks/eap-dispatch.mjs).
@@ -60,13 +74,13 @@ const HOOK_EVENTS = [
 // The id/label/detect matrix mirrored from the TLDR installer, reused as the
 // EAP roster (37 rows). `wired: true` marks a provider EAP installs END-TO-END
 // today (all three layers). A `native` field marks a provider that gets its
-// EAP-Voice rule written natively into its global always-on rules file
-// (`native.voice`), even though its MCP layers are not yet wired — reported as
-// "voice", never "end-to-end". `native.voice: null` means the agent has no
+// EAP-Signal rule written natively into its global always-on rules file
+// (`native.signal`), even though its MCP layers are not yet wired — reported as
+// "signal", never "end-to-end". `native.signal: null` means the agent has no
 // global rules file (per-repo only, e.g. cursor). Every remaining row is
 // detected and reported as "planned" — no false claims.
 //
-// `native.voice` sentinels resolved by resolveNativeVoice(): `$HOME` (home dir),
+// `native.signal` sentinels resolved by resolveNativeSignal(): `$HOME` (home dir),
 // `$XDG_CONFIG_HOME` (env or ~/.config), `$HERMES_HOME` (env or ~/.hermes).
 //
 // `native.mcp` (present only on MCP-capable native agents) describes HOW to
@@ -76,17 +90,17 @@ const HOOK_EVENTS = [
 //   kind: 'json'          -> merge into a JSON/JSONC file at `file` under key `key`;
 //                            shape 'command-args'         -> { command, args }  (cursor, antigravity)
 //                            shape 'command-array-local'  -> { type:'local', command:[cmd,…args], enabled:true } (opencode)
-// pi has NO native.mcp — Pi ships npm extensions, not MCP, so it stays Voice-only.
+// pi has NO native.mcp — Pi ships npm extensions, not MCP, so it stays Signal-only.
 const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',        detect: 'command:claude', wired: true },
   { id: 'gemini',     label: 'Gemini CLI',         detect: 'command:gemini' },
-  { id: 'opencode',   label: 'opencode',           detect: 'command:opencode', native: { voice: '$XDG_CONFIG_HOME/opencode/AGENTS.md', mcp: { kind: 'json', file: '$XDG_CONFIG_HOME/opencode/opencode.jsonc', key: 'mcp', shape: 'command-array-local' } } },
+  { id: 'opencode',   label: 'opencode',           detect: 'command:opencode', native: { signal: '$XDG_CONFIG_HOME/opencode/AGENTS.md', mcp: { kind: 'json', file: '$XDG_CONFIG_HOME/opencode/opencode.jsonc', key: 'mcp', shape: 'command-array-local' } } },
   { id: 'openclaw',   label: 'OpenClaw',           detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
-  { id: 'hermes',     label: 'Hermes Agent',       detect: 'command:hermes', native: { voice: '$HERMES_HOME/SOUL.md', mcp: { kind: 'cli-hermes', bin: 'hermes' } } },
-  { id: 'codex',      label: 'Codex CLI',          detect: 'command:codex', native: { voice: '$HOME/.codex/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'codex' } } },
-  { id: 'pi',         label: 'Pi Coding Agent',    detect: 'command:pi', native: { voice: '$HOME/.pi/agent/AGENTS.md' } },
-  { id: 'grok',       label: 'Grok Build CLI',     detect: 'command:grok', native: { voice: '$HOME/.grok/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'grok' } } },
-  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor||macapp:Cursor', native: { voice: null, mcp: { kind: 'json', file: '$HOME/.cursor/mcp.json', key: 'mcpServers', shape: 'command-args' } } },
+  { id: 'hermes',     label: 'Hermes Agent',       detect: 'command:hermes', native: { signal: '$HERMES_HOME/SOUL.md', mcp: { kind: 'cli-hermes', bin: 'hermes' } } },
+  { id: 'codex',      label: 'Codex CLI',          detect: 'command:codex', native: { signal: '$HOME/.codex/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'codex' } } },
+  { id: 'pi',         label: 'Pi Coding Agent',    detect: 'command:pi', native: { signal: '$HOME/.pi/agent/AGENTS.md' } },
+  { id: 'grok',       label: 'Grok Build CLI',     detect: 'command:grok', native: { signal: '$HOME/.grok/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'grok' } } },
+  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor||macapp:Cursor', native: { signal: null, mcp: { kind: 'json', file: '$HOME/.cursor/mcp.json', key: 'mcpServers', shape: 'command-args' } } },
   { id: 'windsurf',   label: 'Windsurf',           detect: 'command:windsurf||macapp:Windsurf' },
   { id: 'cline',      label: 'Cline',              detect: 'vscode-ext:cline' },
   { id: 'continue',   label: 'Continue',           detect: 'vscode-ext:continue.continue||vscode-ext:continue' },
@@ -114,7 +128,7 @@ const PROVIDERS = [
   { id: 'replit',     label: 'Replit Agent',       detect: 'command:replit' },
   { id: 'junie',      label: 'JetBrains Junie',    detect: 'jetbrains-plugin:junie', soft: true },
   { id: 'qoder',      label: 'Qoder',              detect: 'dir:$HOME/.qoder', soft: true },
-  { id: 'antigravity',label: 'Google Antigravity', detect: 'dir:$HOME/.gemini/antigravity', soft: true, native: { voice: '$HOME/.gemini/config/AGENTS.md', mcp: { kind: 'json', file: '$HOME/.gemini/config/mcp_config.json', key: 'mcpServers', shape: 'command-args' } } },
+  { id: 'antigravity',label: 'Google Antigravity', detect: 'dir:$HOME/.gemini/antigravity', soft: true, native: { signal: '$HOME/.gemini/config/AGENTS.md', mcp: { kind: 'json', file: '$HOME/.gemini/config/mcp_config.json', key: 'mcpServers', shape: 'command-args' } } },
 ];
 
 // ── argv ────────────────────────────────────────────────────────────────────
@@ -274,19 +288,19 @@ function tryWrite(fn) {
   catch (e) { return (e && e.message) || String(e); }
 }
 
-// ── EAP-Voice managed block ──────────────────────────────────────────────────
-// Single source of truth for the Voice block body: the heading + the verbatim
-// EAP-VOICE.md rule. Shared by installClaude (CLAUDE.md) and installVoiceNative
+// ── EAP-Signal managed block ──────────────────────────────────────────────────
+// Single source of truth for the Signal block body: the heading + the verbatim
+// EAP-SIGNAL.md rule. Shared by installClaude (CLAUDE.md) and installSignalNative
 // (codex/opencode/pi/grok/antigravity/hermes rules files). Returns null (and
 // warns) if the rule file cannot be read.
-function buildVoiceBody(warn) {
-  try { return '# EAP-Voice — verdict-first output\n\n' + fs.readFileSync(VOICE_RULE, 'utf8').trimEnd(); }
-  catch (e) { if (typeof warn === 'function') warn(`  cannot read Voice rule (${VOICE_RULE}): ${e.message}`); return null; }
+function buildSignalBody(warn) {
+  try { return '# EAP-Signal — verdict-first output\n\n' + fs.readFileSync(SIGNAL_RULE, 'utf8').trimEnd(); }
+  catch (e) { if (typeof warn === 'function') warn(`  cannot read Signal rule (${SIGNAL_RULE}): ${e.message}`); return null; }
 }
 
 // Resolve an env-aware path sentinel to an absolute path. Honors
 // $XDG_CONFIG_HOME (env or ~/.config), $HERMES_HOME (env or ~/.hermes), and
-// $HOME/~. Shared by resolveNativeVoice (rules files) and installMcpNative (MCP
+// $HOME/~. Shared by resolveNativeSignal (rules files) and installMcpNative (MCP
 // config files) so both read the same environment consistently.
 function resolveSentinelPath(spec) {
   if (spec == null) return null;
@@ -301,11 +315,11 @@ function resolveSentinelPath(spec) {
   return expandHome(spec);
 }
 
-// Resolve a provider's native EAP-Voice rules-file path. Returns null when the
-// provider has no global rules file (native.voice === null, e.g. cursor).
-function resolveNativeVoice(prov) {
-  const spec = prov.native && prov.native.voice;
-  if (!spec) return null; // null (per-repo only) or no native voice at all
+// Resolve a provider's native EAP-Signal rules-file path. Returns null when the
+// provider has no global rules file (native.signal === null, e.g. cursor).
+function resolveNativeSignal(prov) {
+  const spec = prov.native && prov.native.signal;
+  if (!spec) return null; // null (per-repo only) or no native signal at all
   return resolveSentinelPath(spec);
 }
 
@@ -327,11 +341,11 @@ function installClaude(ctx) {
 
   say('→ Claude Code — installing all three EAP layers');
 
-  // 1. Voice rule.
-  const voiceBody = buildVoiceBody(warn);
+  // 1. Signal rule.
+  const signalBody = buildSignalBody(warn);
 
   if (opts.dryRun) {
-    note(`  [1/3] Voice: write managed ${VOICE_BEGIN} block into ${claudeMd}`);
+    note(`  [1/3] Signal: write managed ${SIGNAL_BEGIN} block into ${claudeMd}`);
     note(`  [2/3] MCP: register ${serverNames.join(' + ') || '(none — both disabled)'} via ${useCli ? '`claude mcp add`' : `${mcpPath} mcpServers`}`);
     for (const [name, s] of Object.entries(servers)) note(`         ${name}: ${s.command} ${s.args.join(' ')}`);
     note(`  [3/3] Hooks: wire ${HOOK_EVENTS.map((h) => h.event).join(', ')} into ${settingsPath}`);
@@ -341,21 +355,21 @@ function installClaude(ctx) {
     return;
   }
 
-  // 1. Voice rule → CLAUDE.md (managed marker-fenced block). The write is guarded
+  // 1. Signal rule → CLAUDE.md (managed marker-fenced block). The write is guarded
   // so a read-only configDir records a clean failure and MCP/hooks are still
   // attempted rather than aborting the whole multi-agent run with a stack trace.
-  if (voiceBody != null) {
+  if (signalBody != null) {
     const err = tryWrite(() => {
       const existing = fs.existsSync(claudeMd) ? fs.readFileSync(claudeMd, 'utf8') : null;
-      const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
+      const next = upsertFencedBlock(existing, SIGNAL_BEGIN, SIGNAL_END, signalBody);
       fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
       backupOnce(claudeMd);
       // atomicWrite (temp + rename) is symlink-safe, unlike fs.writeFileSync which
       // would follow a planted CLAUDE.md symlink and write through to its target.
       atomicWrite(claudeMd, next, 0o644);
     });
-    if (err) { warn(`  [1/3] Voice write failed (${claudeMd}): ${err}`); results.failed.push(['claude-voice', err]); }
-    else ok(`  [1/3] Voice rule written to ${claudeMd}`);
+    if (err) { warn(`  [1/3] Signal write failed (${claudeMd}): ${err}`); results.failed.push(['claude-signal', err]); }
+    else ok(`  [1/3] Signal rule written to ${claudeMd}`);
   }
 
   // 2. MCP servers.
@@ -437,32 +451,32 @@ function removeInstallerCreatedEmpty(file, obj) {
   try { fs.unlinkSync(file); return true; } catch { return false; }
 }
 
-// ── Native EAP-Voice install (non-Claude AGENTS.md / SOUL.md agents) ─────────
-// Writes the SAME managed <!-- eap-voice:begin --> … block installClaude writes,
-// into the agent's global always-on rules file (native.voice). Voice ONLY — MCP
+// ── Native EAP-Signal install (non-Claude AGENTS.md / SOUL.md agents) ─────────
+// Writes the SAME managed <!-- eap-signal:begin --> … block installClaude writes,
+// into the agent's global always-on rules file (native.signal). Signal ONLY — MCP
 // registration for these agents is a separate, later step. For a per-repo agent
-// (native.voice === null, e.g. cursor) there is no global file: print the
+// (native.signal === null, e.g. cursor) there is no global file: print the
 // per-repo note and record it handled.
-function installVoiceNative(ctx, prov) {
+function installSignalNative(ctx, prov) {
   const { opts, say, note, ok, warn, results } = ctx;
-  const target = resolveNativeVoice(prov);
+  const target = resolveNativeSignal(prov);
 
   // Per-repo only (cursor): no global rules file to write.
   if (target == null) {
-    say(`→ ${prov.label} — EAP-Voice is per-repo (no global rules file)`);
+    say(`→ ${prov.label} — EAP-Signal is per-repo (no global rules file)`);
     note('  cursor-agent only honors a per-project AGENTS.md; drop one carrying the');
-    note(`  ${VOICE_BEGIN} block at each repo root you use it in.`);
+    note(`  ${SIGNAL_BEGIN} block at each repo root you use it in.`);
     if (opts.dryRun) results.dryRun.push(prov.id);
     else results.installed.push(prov.id);
     return;
   }
 
-  const voiceBody = buildVoiceBody(warn);
-  say(`→ ${prov.label} — installing EAP-Voice (native)`);
-  if (voiceBody == null) { results.failed.push([prov.id, 'Voice rule unreadable']); return; }
+  const signalBody = buildSignalBody(warn);
+  say(`→ ${prov.label} — installing EAP-Signal (native)`);
+  if (signalBody == null) { results.failed.push([prov.id, 'Signal rule unreadable']); return; }
 
   if (opts.dryRun) {
-    note(`  Voice: write managed ${VOICE_BEGIN} block into ${target}`);
+    note(`  Signal: write managed ${SIGNAL_BEGIN} block into ${target}`);
     results.dryRun.push(prov.id);
     return;
   }
@@ -471,22 +485,22 @@ function installVoiceNative(ctx, prov) {
   // clean per-agent failure instead of aborting the whole multi-agent run.
   const err = tryWrite(() => {
     const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-    const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
+    const next = upsertFencedBlock(existing, SIGNAL_BEGIN, SIGNAL_END, signalBody);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     backupOnce(target);
     // atomicWrite (temp + rename) is symlink-safe — never write through a planted
     // rules-file symlink, matching installClaude.
     atomicWrite(target, next, 0o644);
   });
-  if (err) { warn(`  Voice write failed for ${prov.label} (${target}): ${err}`); results.failed.push([prov.id, err]); return; }
-  ok(`  Voice rule written to ${target}`);
+  if (err) { warn(`  Signal write failed for ${prov.label} (${target}): ${err}`); results.failed.push([prov.id, err]); return; }
+  ok(`  Signal rule written to ${target}`);
   results.installed.push(prov.id);
 }
 
 // ── Native MCP install (register eap-runtime + eap-context) ──────────────────
 // Registers the two EAP MCP servers into an MCP-capable native agent, using the
 // per-agent mechanism declared in prov.native.mcp. Called right after
-// installVoiceNative so a native agent gets Voice THEN MCP. Providers without a
+// installSignalNative so a native agent gets Signal THEN MCP. Providers without a
 // native.mcp descriptor (pi) are a no-op. Honors --no-runtime / --no-context
 // (register only the enabled servers) and --dry-run (print, write nothing).
 
@@ -622,7 +636,7 @@ function planProvider(ctx, prov) {
   const { note } = ctx;
   note(`→ ${prov.label} detected — EAP wiring PLANNED (not yet end-to-end).`);
   note('  Today EAP is wired end-to-end for Claude Code only. For this agent you can:');
-  note(`    • Voice: paste ${VOICE_RULE} into its always-on rules/memory file.`);
+  note(`    • Signal: paste ${SIGNAL_RULE} into its always-on rules/memory file.`);
   note(`    • MCP:   add eap-runtime (node ${RUNTIME_MCP}) and eap-context`);
   note(`             (python3 ${CONTEXT_MCP} <project-root>) to its MCP config.`);
   ctx.results.planned.push(prov.id);
@@ -640,14 +654,14 @@ function uninstall(ctx) {
   const eapConfPath = path.join(configDir, '.eap.json');
   const useCli = !ctx.configDirExplicit && hasCmd('claude');
 
-  // 1. Voice block.
+  // 1. Signal block.
   if (fs.existsSync(claudeMd)) {
-    const { text, stripped } = stripFencedBlock(fs.readFileSync(claudeMd, 'utf8'), VOICE_BEGIN, VOICE_END);
+    const { text, stripped } = stripSignalBlocks(fs.readFileSync(claudeMd, 'utf8'));
     if (stripped && !opts.dryRun) {
       if (text === '') { try { fs.unlinkSync(claudeMd); } catch { /* best effort */ } }
       else atomicWrite(claudeMd, text, 0o644);  // symlink-safe, matches install
     }
-    if (stripped) ok(text === '' ? `  removed ${claudeMd}` : `  stripped Voice block from ${claudeMd}`);
+    if (stripped) ok(text === '' ? `  removed ${claudeMd}` : `  stripped Signal block from ${claudeMd}`);
   }
 
   // 2. MCP servers.
@@ -687,21 +701,21 @@ function uninstall(ctx) {
   // Layer-flags file.
   if (fs.existsSync(eapConfPath) && !opts.dryRun) { try { fs.unlinkSync(eapConfPath); } catch { /* best effort */ } }
 
-  // Native EAP-Voice blocks (codex/opencode/pi/grok/antigravity/hermes). Strip
+  // Native EAP-Signal blocks (codex/opencode/pi/grok/antigravity/hermes). Strip
   // exactly our fenced block from each agent's global rules file, preserving all
   // surrounding user content; delete the file only when nothing else remains.
-  // cursor (native.voice === null) is per-repo — no global file to touch.
+  // cursor (native.signal === null) is per-repo — no global file to touch.
   for (const prov of PROVIDERS) {
     if (!prov.native) continue;
-    const target = resolveNativeVoice(prov);
+    const target = resolveNativeSignal(prov);
     if (target == null || !fs.existsSync(target)) continue;
-    const { text, stripped } = stripFencedBlock(fs.readFileSync(target, 'utf8'), VOICE_BEGIN, VOICE_END);
+    const { text, stripped } = stripSignalBlocks(fs.readFileSync(target, 'utf8'));
     if (!stripped) continue;
     if (!opts.dryRun) {
       if (text === '') { try { fs.unlinkSync(target); } catch { /* best effort */ } }
       else atomicWrite(target, text, 0o644); // symlink-safe, matches install
     }
-    ok(text === '' ? `  removed ${target}` : `  stripped Voice block from ${prov.label} (${target})`);
+    ok(text === '' ? `  removed ${target}` : `  stripped Signal block from ${prov.label} (${target})`);
   }
 
   // Native MCP registrations (codex/grok/hermes CLI + cursor/antigravity/opencode
@@ -720,26 +734,26 @@ function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.leng
 function printList(noColor) {
   const c = makeChalk(noColor);
   const wired = PROVIDERS.filter((p) => p.wired).length;
-  const voiceMcp = PROVIDERS.filter((p) => !p.wired && p.native && p.native.mcp).length;
-  const voiceOnly = PROVIDERS.filter((p) => !p.wired && p.native && !p.native.mcp).length;
-  const planned = PROVIDERS.length - wired - voiceMcp - voiceOnly;
+  const signalMcp = PROVIDERS.filter((p) => !p.wired && p.native && p.native.mcp).length;
+  const signalOnly = PROVIDERS.filter((p) => !p.wired && p.native && !p.native.mcp).length;
+  const planned = PROVIDERS.length - wired - signalMcp - signalOnly;
   process.stdout.write(c.cyan('EAP provider matrix') + '\n\n');
   process.stdout.write(`  ${pad('ID', 13)} ${pad('AGENT', 22)} STATUS\n`);
   process.stdout.write(`  ${pad('--', 13)} ${pad('-----', 22)} ------\n`);
   for (const p of PROVIDERS) {
     let status;
     if (p.wired) status = c.green('end-to-end (all 3)');
-    else if (p.native && p.native.mcp) status = c.green(p.native.voice === null ? 'voice(per-repo) + mcp' : 'voice + mcp');
-    else if (p.native) status = c.green('voice');
+    else if (p.native && p.native.mcp) status = c.green(p.native.signal === null ? 'signal(per-repo) + mcp' : 'signal + mcp');
+    else if (p.native) status = c.green('signal');
     else status = c.dim('planned');
     const soft = p.soft ? c.dim(' (soft-detect)') : '';
     process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${status}${soft}\n`);
   }
   process.stdout.write('\n');
-  process.stdout.write(c.dim(`  ${wired} provider wired end-to-end (Claude Code, all 3 layers); ${voiceMcp} with native EAP-Voice + both MCP servers; ${voiceOnly} EAP-Voice only (no MCP); ${planned} detected + planned.\n`));
-  process.stdout.write(c.dim('  "voice + mcp" = the always-on EAP-Voice rule AND both EAP MCP servers are registered natively; cursor is voice(per-repo).\n'));
+  process.stdout.write(c.dim(`  ${wired} provider wired end-to-end (Claude Code, all 3 layers); ${signalMcp} with native EAP-Signal + both MCP servers; ${signalOnly} EAP-Signal only (no MCP); ${planned} detected + planned.\n`));
+  process.stdout.write(c.dim('  "signal + mcp" = the always-on EAP-Signal rule AND both EAP MCP servers are registered natively; cursor is signal(per-repo).\n'));
   process.stdout.write(c.dim('  Planned providers are detected and given a manual plan — never silently claimed as wired.\n'));
-  process.stdout.write(c.dim('  Layers: Voice (always-on rule) + eap-runtime MCP + eap-context MCP + hook dispatcher.\n'));
+  process.stdout.write(c.dim('  Layers: Signal (always-on rule) + eap-runtime MCP + eap-context MCP + hook dispatcher.\n'));
 }
 
 // ── help ────────────────────────────────────────────────────────────────────
@@ -762,26 +776,26 @@ FLAGS
                          Default: \$CLAUDE_CONFIG_DIR or ~/.claude.
   --no-runtime           Skip the eap-runtime (working-memory offload) MCP server.
   --no-context           Skip the eap-context (code-symbol-graph) MCP server.
-  --uninstall, -u        Remove the EAP Voice block, MCP entries, and hooks.
+  --uninstall, -u        Remove the EAP Signal block, MCP entries, and hooks.
   --non-interactive      Never prompt; use defaults (skips the TUI).
   --no-color             Disable ANSI colors.
   --force                Reserved (installs are idempotent; re-runs are safe).
   -h, --help             Show this help.
 
 WHAT GETS INSTALLED (Claude Code, end-to-end)
-  1. EAP-Voice   -> managed block in <configDir>/CLAUDE.md
+  1. EAP-Signal   -> managed block in <configDir>/CLAUDE.md
   2. eap-runtime -> node   ${RUNTIME_MCP}
      eap-context -> python3 ${CONTEXT_MCP} <project-root>
   3. hooks       -> SessionStart / PreToolUse / PostToolUse / PreCompact in
                     <configDir>/settings.json, running src/hooks/eap-dispatch.mjs
 
-NATIVE AGENTS (EAP-Voice rule + both EAP MCP servers, registered natively)
-  codex, grok        -> Voice rule + '<bin> mcp add … -- <cmd> <args>'
-  hermes             -> Voice rule + 'hermes mcp add … --command <cmd> --args <args>'
-  opencode           -> Voice rule + 'mcp' key in opencode.jsonc (type:local)
+NATIVE AGENTS (EAP-Signal rule + both EAP MCP servers, registered natively)
+  codex, grok        -> Signal rule + '<bin> mcp add … -- <cmd> <args>'
+  hermes             -> Signal rule + 'hermes mcp add … --command <cmd> --args <args>'
+  opencode           -> Signal rule + 'mcp' key in opencode.jsonc (type:local)
   cursor, antigravity-> MCP in ~/.cursor/mcp.json / ~/.gemini/config/mcp_config.json
-                        (cursor's Voice rule is per-repo AGENTS.md, MCP is global)
-  pi                 -> Voice rule only (Pi has no MCP; it uses npm extensions)
+                        (cursor's Signal rule is per-repo AGENTS.md, MCP is global)
+  pi                 -> Signal rule only (Pi has no MCP; it uses npm extensions)
 Every other provider is detected and reported as "planned" — EAP does not claim
 to wire an agent it has not implemented. See --list for the full matrix.
 `);
@@ -827,7 +841,7 @@ async function runTui(opts, c) {
         opts.runtime = !/^n/i.test(await ask(c.cyan('  Enable EAP-Runtime MCP? ') + c.dim('[Y/n] '), 'y'));
         opts.context = !/^n/i.test(await ask(c.cyan('  Enable EAP-Context MCP? ') + c.dim('[Y/n] '), 'y'));
       }
-      const layers0 = 'Voice' + (opts.runtime ? ' + Runtime' : '') + (opts.context ? ' + Context' : '');
+      const layers0 = 'Signal' + (opts.runtime ? ' + Runtime' : '') + (opts.context ? ' + Context' : '');
       process.stdout.write('\n' + c.cyan('  Plan: ') + `${chosen.map((p) => p.label).join(', ')}  ·  layers: ${layers0}\n`);
       if (!opts.yes) {
         if (/^n/i.test(await ask(c.cyan('  Proceed? ') + c.dim('[Y/n] '), 'y'))) { process.stdout.write(c.dim('  Cancelled.\n')); return false; }
@@ -862,7 +876,7 @@ async function runTui(opts, c) {
       }
     }
 
-    // 2. Layer curation. Voice is always on; Runtime/Context are optional MCP
+    // 2. Layer curation. Signal is always on; Runtime/Context are optional MCP
     //    servers. Only offer the MCP toggles when an end-to-end agent is chosen
     //    (planned agents get a manual plan regardless).
     const anyWired = roster.some((p) => p.wired);
@@ -875,7 +889,7 @@ async function runTui(opts, c) {
 
     // 3. Confirm.
     opts.only = roster.map((p) => p.id);
-    const layers = 'Voice' + (opts.runtime ? ' + Runtime' : '') + (opts.context ? ' + Context' : '');
+    const layers = 'Signal' + (opts.runtime ? ' + Runtime' : '') + (opts.context ? ' + Context' : '');
     process.stdout.write('\n' + c.cyan('  Plan: ') + `${roster.map((p) => p.label).join(', ')}  ·  layers: ${layers}\n`);
     if (!opts.yes) {
       const go = await ask(c.cyan('  Proceed? ') + c.dim('[Y/n] '), 'y');
@@ -942,7 +956,7 @@ function runInstall(opts) {
 
   ctx.say('EAP installer');
   ctx.note(`  repo: ${REPO_ROOT}`);
-  ctx.note(`  layers: Voice${opts.runtime ? ' + Runtime' : ''}${opts.context ? ' + Context' : ''}`);
+  ctx.note(`  layers: Signal${opts.runtime ? ' + Runtime' : ''}${opts.context ? ' + Context' : ''}`);
   if (opts.dryRun) ctx.note('  (dry run — nothing will be written)');
   process.stdout.write('\n');
 
@@ -962,7 +976,7 @@ function runInstall(opts) {
     // clean per-agent failure and moves on — it never aborts the whole run.
     try {
       if (prov.wired) installClaude(ctx);
-      else if (prov.native) { installVoiceNative(ctx, prov); installMcpNative(ctx, prov); }
+      else if (prov.native) { installSignalNative(ctx, prov); installMcpNative(ctx, prov); }
       else planProvider(ctx, prov);
     } catch (e) {
       const msg = (e && e.message) || String(e);
@@ -975,7 +989,7 @@ function runInstall(opts) {
   // Summary.
   ctx.say('EAP done');
   if (ctx.results.dryRun.length) { process.stdout.write('  would install (dry run — nothing written):\n'); for (const a of ctx.results.dryRun) process.stdout.write(`    • ${a}\n`); }
-  if (ctx.results.installed.length) { ctx.ok('  installed (claude = all 3 layers; others = EAP-Voice):'); for (const a of ctx.results.installed) process.stdout.write(`    • ${a}\n`); }
+  if (ctx.results.installed.length) { ctx.ok('  installed (claude = all 3 layers; others = EAP-Signal):'); for (const a of ctx.results.installed) process.stdout.write(`    • ${a}\n`); }
   if (ctx.results.planned.length) { process.stdout.write('  planned (detected, manual):\n'); for (const a of ctx.results.planned) process.stdout.write(`    • ${a}\n`); }
   if (ctx.results.failed.length) { ctx.warn('  failed:'); for (const [id, why] of ctx.results.failed) process.stderr.write(`    • ${id} — ${why}\n`); }
   if (!ctx.results.installed.length && !ctx.results.planned.length && !ctx.results.failed.length && !ctx.results.dryRun.length) {

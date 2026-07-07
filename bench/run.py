@@ -22,7 +22,7 @@ Honesty rules enforced here (docs/EFFICIENCY.md)
   * task_success is printed next to every token count; a token win that loses
     the answer is flagged as a REGRESSION and the run exits nonzero.
   * Single membrane: these are input tokens only. Nothing here is multiplied
-    with Runtime/Voice numbers, and no compounded headline is printed.
+    with Runtime/Signal numbers, and no compounded headline is printed.
   * All B2 retrieval is LOSSLESS (exact chunks, never summaries); its recall
     on the answer-bearing chunk is exactly the task_success column. No lossy
     (LLM-summary) arm is measured because it would not be reproducible.
