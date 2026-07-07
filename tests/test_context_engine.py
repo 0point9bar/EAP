@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -568,6 +569,85 @@ class ContextEngineTest(unittest.TestCase):
 
         for bad in (123, ["/etc"], True, 1.5, {}):
             self.assertEqual(code(bad), -32602, f"root={bad!r} should be -32602")
+
+    # -- security regressions (round 3: deep closure) ------------------------
+
+    def test_extract_file_with_many_imports_is_linear(self):
+        # Non-regex quadratic: _line_at was text.count("\\n", 0, pos) per symbol,
+        # O(n^2) across a file with many symbols. A ~1MB Go file with a large
+        # import block stalled extraction ~21s; the bisect line index is linear.
+        root = tempfile.mkdtemp(prefix="eap-line-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        big = "import (\n" + ('\t"fmt"\n' * 60000) + ")\n"  # ~440KB, 60k imports
+        Path(root, "f.go").write_text(big)
+        start = time.perf_counter()
+        syms = extract.extract_file(os.path.join(root, "f.go"), "f.go")
+        self.assertLess(time.perf_counter() - start, 1.5,
+                        "extract_file is super-linear in symbol count (_line_at)")
+        self.assertGreater(len(syms), 50000)
+        # line numbers are still correct after the index change
+        js = extract._extract_js(
+            'import x from "a"\n\nfunction foo() {}\n\nclass Bar {}\n', "w.js")
+        by = {s["name"]: s["line"] for s in js}
+        self.assertEqual(by["a"], 1)
+        self.assertEqual(by["foo"], 3)
+        self.assertEqual(by["Bar"], 5)
+
+    def test_cache_rejects_dangling_link_endpoint(self):
+        # A poisoned cache whose link references an undefined node loads past the
+        # scalar checks, then crashes the read layer (g.nodes[endpoint]) with an
+        # uncaught KeyError load_or_build can't catch. load() must reject it.
+        root = tempfile.mkdtemp(prefix="eap-dangling-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        Path(root, "a.py").write_text("def foo():\n    return foo()\n")
+        _, path = graph.build_and_save(root)
+        data = json.loads(Path(path).read_text())
+        data["links"].append({"source": "a.py::foo", "target": "ghost::ghost",
+                              "relation": "calls", "provenance": "INFERRED"})
+        Path(path).write_text(json.dumps(data))
+        with self.assertRaises(graph.CacheFormatError):
+            graph.load(path)
+        # and load_or_build rebuilds cleanly rather than crashing
+        g = graph.load_or_build(root)
+        self.assertIn("foo", {n["name"] for n in g.nodes.values()})
+
+    def test_mcp_build_rejects_nul_in_root(self):
+        # os.path.realpath raises ValueError (not TypeError) on an embedded NUL;
+        # a valid str like "a\\x00b" must be -32602, not a -32603 realpath crash.
+        engine = mcp.Engine(self.root)
+        for bad in ("\x00", "a\x00b", self.root + "\x00"):
+            r = mcp.handle_request(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "eap_graph_build",
+                            "arguments": {"root": bad}}}, engine)
+            self.assertEqual(r.get("error", {}).get("code"), -32602,
+                             f"root={bad!r} should be -32602")
+
+    def test_mcp_server_runs_as_a_plain_script(self):
+        # The installer registers the server as `python3 .../mcp.py <root>` —
+        # DIRECT script execution with no package context. The module uses
+        # relative imports (`from . import graph`), which raise ImportError as a
+        # script unless the entry point bootstraps its package. The other tests
+        # IMPORT the module, so they miss this; only a subprocess exec (exactly
+        # how the agent launches it) catches a broken server that would fail for
+        # every agent, Claude included.
+        mcp_py = str(SRC / "eap_context" / "mcp.py")
+        req = ('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+               '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n')
+        proc = subprocess.run([sys.executable, mcp_py, self.root],
+                              input=req, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        tools: set = set()
+        for line in proc.stdout.splitlines():
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("id") == 2:
+                tools = {t["name"] for t in obj["result"]["tools"]}
+        self.assertIn("eap_graph_query", tools)
+        self.assertIn("eap_graph_build", tools)
+        self.assertEqual(len(tools), 5)
 
 
 if __name__ == "__main__":

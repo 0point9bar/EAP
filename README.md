@@ -25,10 +25,10 @@ One installer, one hook dispatcher, one skill format, three compression gates.
 
 | Layer | State | Notes |
 |---|---|---|
-| **EAP-Voice** | **shipping** | The perfected TLDR prompt/skill, prompt-only, works on 35+ agents today. |
+| **EAP-Voice** | **shipping** | The perfected TLDR prompt/skill. Prompt-only, so it applies to any agent; the installer writes it **natively** for Claude Code + 7 native agents (see `--list`). |
 | **EAP-Runtime** | **built** (clean-room) | Executor ("think in code"), session event log + snapshot/restore, offload store, JSON-RPC 2.0 stdio MCP server. |
 | **EAP-Context** | **built** (stdlib-only) | Symbol-graph engine (Python `ast` + JS/TS extraction), query with pointers, CLI + stdio MCP server. 9 Python tests green (`npm run test:py`). |
-| **Installer** | **built** | `bin/eap-install.mjs` — one command wires all three layers (Voice rule + both MCP servers + hook dispatcher). **End-to-end for Claude Code today**; the other 34 agents in the roster are detected and given an honest manual plan (`--list`). 47 node tests green (`npm test`). |
+| **Installer** | **built** | `bin/eap-install.mjs` — one command wires all three layers (Voice rule + both MCP servers + hook dispatcher). **End-to-end for Claude Code**; **6 native agents** (codex, grok, hermes, cursor, antigravity, opencode) get the EAP-Voice rule **and** both EAP MCP servers registered natively; **pi** gets EAP-Voice only (Pi has no MCP); every remaining roster entry is detected + given an honest manual plan (`--list`). 92 node tests green (`npm test`). |
 | **Bench** | **built** | Deterministic harness over a committed 82 KB corpus; 6 fixed tasks, B2 vs honest grep baseline B1: 37.3% aggregate token reduction, task success 6/6 (`npm run bench`). |
 
 See `docs/ARCHITECTURE.md` for the full design and `EAP.md` for the protocol.
@@ -78,9 +78,19 @@ For **Claude Code** the installer is end-to-end. It:
 3. wires the hook dispatcher (`src/hooks/eap-dispatch.mjs`) into
    `<config-dir>/settings.json` for **SessionStart / PreToolUse / PostToolUse / PreCompact**.
 
-Every **other** provider (Gemini, Cursor, Windsurf, opencode, Codex, …34 total) is
-**detected and reported as `planned`** — the installer prints a per-agent manual plan and
-does **not** claim to have wired an agent it has not implemented end-to-end. Zero
+Beyond Claude Code, the installer also wires **native** agents:
+
+- **codex, grok, hermes, cursor, antigravity, opencode** — the **EAP-Voice** rule *and*
+  both **EAP MCP servers** (eap-runtime + eap-context) are registered natively, via each
+  agent's MCP CLI (`codex`/`grok` `mcp add … -- <cmd>`, `hermes mcp add … --command <cmd> --args …`)
+  or its MCP config file (`~/.cursor/mcp.json`, `~/.gemini/config/mcp_config.json`,
+  `opencode.jsonc`). For these global registrations eap-context indexes the agent's runtime
+  cwd (no pinned project root). cursor's Voice rule is per-repo; its MCP is global.
+- **pi** — the EAP-Voice rule only. Pi ships npm extensions, not MCP.
+
+Every **remaining** provider (Gemini, Windsurf, Cline, …) is **detected and reported as
+`planned`** — the installer prints a per-agent manual plan and does **not** claim to have
+wired an agent it has not implemented. `--list` is the authoritative matrix. Zero
 third-party dependencies: Node built-ins only.
 
 ## Honest efficiency

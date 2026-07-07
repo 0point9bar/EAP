@@ -9,7 +9,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+
+# Run either as a module (`python3 -m eap_context …`, the documented form) or as
+# a plain script (`python3 .../eap_context/cli.py`); bootstrap the package
+# context in the latter so the relative imports below resolve.
+if __package__ in (None, ""):  # pragma: no cover
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "eap_context"
 
 from . import graph as graph_mod
 from . import mcp as mcp_mod

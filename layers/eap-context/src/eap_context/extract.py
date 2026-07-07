@@ -19,6 +19,7 @@ Binary files (NUL byte in the head) and files over MAX_FILE_BYTES are skipped.
 from __future__ import annotations
 
 import ast
+import bisect
 import os
 import re
 
@@ -243,8 +244,22 @@ def _find_import_specs(text: str, regex) -> list[tuple[int, str]]:
     return specs
 
 
-def _line_at(text: str, pos: int) -> int:
-    return text.count("\n", 0, pos) + 1
+def _newline_offsets(text: str) -> list[int]:
+    """Byte offsets of every '\\n' in *text*, computed once via C-level find."""
+    out: list[int] = []
+    idx = text.find("\n")
+    while idx != -1:
+        out.append(idx)
+        idx = text.find("\n", idx + 1)
+    return out
+
+
+def _line_at(newlines: list[int], pos: int) -> int:
+    """1-based line for byte offset *pos*, via bisect over precomputed newline
+    offsets — O(log n) per lookup. The old ``text.count("\\n", 0, pos)`` was
+    O(pos) and summed to O(n^2) across a file's symbols (a ~1MB file with a large
+    import block stalled extraction ~20s)."""
+    return bisect.bisect_left(newlines, pos) + 1
 
 
 def _module_ref(spec: str) -> str:
@@ -263,6 +278,7 @@ def _refs_in_slice(chunk: str, keywords: frozenset, own: str) -> list[str]:
 
 
 def _extract_regex_lang(text: str, rel: str, defs, import_specs, keywords) -> list[dict]:
+    newlines = _newline_offsets(text)  # computed once; line lookups are O(log n)
     found: list[tuple[int, str, str, str | None]] = []  # (pos, kind, name, extra_ref)
     for kind, rx in defs:
         for m in rx.finditer(text):
@@ -279,7 +295,7 @@ def _extract_regex_lang(text: str, rel: str, defs, import_specs, keywords) -> li
             "name": name,
             "kind": kind,
             "file": rel,
-            "line": _line_at(text, pos),
+            "line": _line_at(newlines, pos),
             "refs": sorted(set(refs)),
         })
     for pos, spec in import_specs:
@@ -287,7 +303,7 @@ def _extract_regex_lang(text: str, rel: str, defs, import_specs, keywords) -> li
             "name": _module_ref(spec),
             "kind": "import",
             "file": rel,
-            "line": _line_at(text, pos),
+            "line": _line_at(newlines, pos),
             "refs": [_module_ref(spec)],
         })
     return symbols

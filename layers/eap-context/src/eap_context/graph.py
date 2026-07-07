@@ -260,8 +260,15 @@ def _is_safe_relpath(p) -> bool:
     return all(seg != ".." for seg in s.split("/"))
 
 
+# NEL, LINE SEPARATOR, PARAGRAPH SEPARATOR — not < 0x20, but Python's
+# str.splitlines() and many renderers treat them as line breaks, so they could
+# forge a pointer line just like \n. Reject them alongside the ASCII controls.
+_UNICODE_LINE_BREAKS = "\x85\u2028\u2029"
+
+
 def _has_control_char(s: str) -> bool:
-    return any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+    return any(ord(c) < 0x20 or ord(c) == 0x7f or c in _UNICODE_LINE_BREAKS
+               for c in s)
 
 
 def _check_str_field(v, what: str) -> str:
@@ -331,6 +338,14 @@ def load(path: str) -> SymbolGraph:
         _check_str_field(target, "link target")
         _check_str_field(relation, "link relation")
         _check_str_field(provenance, "link provenance")
+        # Referential integrity: build() only ever emits edges between defined
+        # nodes (add_edge enforces it). A poisoned cache with a dangling
+        # source/target loads fine here but then crashes the read layer
+        # (query/neighbors do g.nodes[endpoint]) with an UNCAUGHT KeyError that
+        # load_or_build's try can't catch — reject it so the cache rebuilds.
+        if source not in g.nodes or target not in g.nodes:
+            raise CacheFormatError(
+                f"link endpoint is not a defined node: {source!r} -> {target!r}")
         link["provenance"] = provenance
         idx = len(g.edges)
         g.edges.append(link)

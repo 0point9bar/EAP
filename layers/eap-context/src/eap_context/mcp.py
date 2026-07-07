@@ -18,6 +18,17 @@ import json
 import os
 import sys
 
+# Allow running as a plain script — the installer registers the server as
+# `python3 <repo>/layers/eap-context/src/eap_context/mcp.py <root>`, i.e. direct
+# script execution with no package context, which would make the `from . import`
+# below raise "attempted relative import with no known parent package". When run
+# without a package, put the package's PARENT dir on sys.path and set
+# __package__ so the relative imports resolve to eap_context.* (module form,
+# `python3 -m eap_context.mcp`, still works unchanged).
+if __package__ in (None, ""):  # pragma: no cover — exercised via subprocess test
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "eap_context"
+
 from . import graph as graph_mod
 from . import query as query_mod
 from .query import DEFAULT_DEPTH, DEFAULT_LIMIT
@@ -84,6 +95,10 @@ class Engine:
             # boundary so a bad type is a clean -32602 like every other param.
             if not isinstance(root, str):
                 raise JsonRpcError(INVALID_PARAMS, "param 'root' must be a string")
+            if "\x00" in root:
+                # os.path.realpath raises ValueError (not TypeError) on an
+                # embedded NUL, which would surface as -32603; keep it a -32602.
+                raise JsonRpcError(INVALID_PARAMS, "param 'root' contains a null byte")
             base = os.path.realpath(self.root)
             target = os.path.realpath(root)
             if target != base and not target.startswith(base + os.sep):

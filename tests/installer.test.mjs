@@ -26,7 +26,9 @@ test('--list exits 0 and prints the provider matrix (claude end-to-end)', () => 
   assert.match(r.stdout, /claude/);
   assert.match(r.stdout, /end-to-end/);
   assert.match(r.stdout, /planned/);
-  // The full 35-provider roster is present.
+  // Native EAP-Voice agents render as "voice", not "planned".
+  assert.match(r.stdout, /voice/);
+  // The full provider roster is present.
   assert.match(r.stdout, /antigravity/);
 });
 
@@ -161,4 +163,318 @@ test('a planted CLAUDE.md symlink is not followed (atomic write, symlink-safe)',
     rmSync(home, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
+});
+
+// ── native EAP-Voice agents ──────────────────────────────────────────────────
+// The non-Claude agents whose EAP-Voice rule installs natively into a global
+// always-on rules file. Every run is fully env-sandboxed (HOME / XDG_CONFIG_HOME
+// / HERMES_HOME / CLAUDE_CONFIG_DIR all point into a throwaway dir) so the real
+// user's ~/.codex, ~/.grok, etc. are NEVER touched.
+const NATIVE_AGENTS = ['codex', 'opencode', 'pi', 'grok', 'antigravity', 'hermes'];
+
+// Sandbox env for a throwaway HOME. Isolates every path the native resolver uses.
+function sandboxEnv(home) {
+  return {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, 'xdg'),
+    HERMES_HOME: join(home, 'hermes'),
+    CLAUDE_CONFIG_DIR: join(home, '.claude'),
+    // Neutralize PATH to a minimal system path so the tests never shell out to a
+    // REAL agent CLI (codex/grok/hermes may be installed on the dev machine).
+    // sh + coreutils stay reachable; the agent bins do not, so native MCP
+    // registration deterministically takes the "bin absent -> manual note"
+    // branch — matching the "can't assume the real CLIs accept these args in a
+    // sandbox" contract. Node itself is spawned by absolute path, not via PATH.
+    PATH: '/usr/bin:/bin',
+    NO_COLOR: '1',
+  };
+}
+
+// Expected native rules-file path for an agent, given a sandbox env. Mirrors
+// resolveNativeVoice() in the installer.
+function nativePath(id, env) {
+  switch (id) {
+    case 'codex':       return join(env.HOME, '.codex', 'AGENTS.md');
+    case 'opencode':    return join(env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md');
+    case 'pi':          return join(env.HOME, '.pi', 'agent', 'AGENTS.md');
+    case 'grok':        return join(env.HOME, '.grok', 'AGENTS.md');
+    case 'antigravity': return join(env.HOME, '.gemini', 'config', 'AGENTS.md');
+    case 'hermes':      return join(env.HERMES_HOME, 'SOUL.md');
+    default: throw new Error(`no native path for ${id}`);
+  }
+}
+
+for (const id of NATIVE_AGENTS) {
+  test(`native EAP-Voice: --only ${id} writes the eap-voice block into its global rules file`, () => {
+    const home = mkTmp(`nat-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      const r = run(['--only', id, '--non-interactive', '--no-color'], { env });
+      assert.equal(r.status, 0, r.stderr);
+      const file = nativePath(id, env);
+      assert.ok(existsSync(file), `${id}: rules file written at ${file}`);
+      const txt = readFileSync(file, 'utf8');
+      assert.match(txt, /<!-- eap-voice:begin -->/, `${id}: begin marker`);
+      assert.match(txt, /<!-- eap-voice:end -->/, `${id}: end marker`);
+      assert.match(txt, /Prime directive/, `${id}: a real EAP-VOICE line`);
+      // Reported as installed, not planned.
+      assert.match(r.stdout, new RegExp(id));
+      assert.doesNotMatch(r.stdout, /PLANNED/);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test(`native EAP-Voice: --only ${id} is idempotent (one block, file unchanged on re-run)`, () => {
+    const home = mkTmp(`nat-idem-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      assert.equal(run(['--only', id, '--non-interactive', '--no-color'], { env }).status, 0);
+      const file = nativePath(id, env);
+      const first = readFileSync(file, 'utf8');
+      assert.equal(run(['--only', id, '--non-interactive', '--no-color'], { env }).status, 0);
+      const second = readFileSync(file, 'utf8');
+      assert.equal(second, first, `${id}: file byte-identical after re-install`);
+      const begins = second.split('<!-- eap-voice:begin -->').length - 1;
+      assert.equal(begins, 1, `${id}: exactly one Voice block`);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test(`native EAP-Voice: --uninstall strips ${id}'s block, preserving user content above/below`, () => {
+    const home = mkTmp(`nat-uninst-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      // Pre-plant user content ABOVE the block, install, then add user content BELOW.
+      const file = nativePath(id, env);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, '# ABOVE-USER-LINE\n');
+      assert.equal(run(['--only', id, '--non-interactive', '--no-color'], { env }).status, 0);
+      writeFileSync(file, readFileSync(file, 'utf8') + '\n# BELOW-USER-LINE\n');
+      assert.match(readFileSync(file, 'utf8'), /eap-voice:begin/);
+
+      const u = run(['--uninstall', '--non-interactive', '--no-color'], { env });
+      assert.equal(u.status, 0, u.stderr);
+      const after = readFileSync(file, 'utf8');
+      assert.doesNotMatch(after, /eap-voice:begin/, `${id}: block stripped`);
+      assert.doesNotMatch(after, /eap-voice:end/, `${id}: end marker stripped`);
+      assert.match(after, /ABOVE-USER-LINE/, `${id}: content above preserved`);
+      assert.match(after, /BELOW-USER-LINE/, `${id}: content below preserved`);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test(`native EAP-Voice: --dry-run --only ${id} writes nothing`, () => {
+    const home = mkTmp(`nat-dry-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      const r = run(['--dry-run', '--only', id, '--non-interactive', '--no-color'], { env });
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(!existsSync(nativePath(id, env)), `${id}: nothing written on dry-run`);
+      assert.match(r.stdout, /would install/);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+test('native EAP-Voice: --only cursor writes NO global file, exits 0, prints the per-repo note', () => {
+  const home = mkTmp('nat-cursor');
+  const env = sandboxEnv(home);
+  try {
+    const r = run(['--only', 'cursor', '--non-interactive', '--no-color'], { env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /per-repo/i);
+    assert.match(r.stdout, /cursor/i);
+    // Reported as handled (installed list), not planned.
+    assert.doesNotMatch(r.stdout, /PLANNED/);
+    // No global AGENTS.md / rules file created anywhere in the sandbox.
+    const stray = [
+      join(env.HOME, 'AGENTS.md'),
+      join(env.HOME, '.cursor', 'AGENTS.md'),
+      join(env.XDG_CONFIG_HOME, 'cursor', 'AGENTS.md'),
+    ];
+    for (const p of stray) assert.ok(!existsSync(p), `cursor must not write global ${p}`);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// ── native MCP registration (the 6 MCP-capable native agents) ────────────────
+// codex/grok/hermes register via their CLI; cursor/antigravity/opencode register
+// into a JSON/JSONC config file. pi has NO MCP and is not covered here. Every run
+// is env-sandboxed (throwaway HOME/XDG/HERMES + PATH neutralized so the real
+// agent CLIs are never invoked).
+
+// JSON-file agents: resolved file path + top-level key + entry shape.
+const JSON_MCP_AGENTS = {
+  cursor:      { file: (env) => join(env.HOME, '.cursor', 'mcp.json'),                   key: 'mcpServers', shape: 'command-args' },
+  antigravity: { file: (env) => join(env.HOME, '.gemini', 'config', 'mcp_config.json'),  key: 'mcpServers', shape: 'command-args' },
+  opencode:    { file: (env) => join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc'), key: 'mcp',        shape: 'command-array-local' },
+};
+
+// Pre-seed an unrelated server (shape-appropriate) that MUST survive install +
+// uninstall. opencode additionally carries $schema + a plugin array + a comment
+// (JSONC) — all must be preserved through the merge.
+function seedText(id, key, shape) {
+  const other = shape === 'command-array-local'
+    ? { type: 'local', command: ['echo', 'hi'], enabled: true }
+    : { command: 'echo', args: ['hi'] };
+  const obj = { [key]: { 'other-server': other } };
+  if (id === 'opencode') {
+    obj.$schema = 'https://opencode.ai/config.json';
+    obj.plugin = ['some-plugin'];
+    return '// opencode config (JSONC — comment must not break the merge)\n' + JSON.stringify(obj, null, 2) + '\n';
+  }
+  return JSON.stringify(obj, null, 2) + '\n';
+}
+
+for (const [id, spec] of Object.entries(JSON_MCP_AGENTS)) {
+  test(`native MCP (json): --only ${id} merges eap-runtime + eap-context (${spec.shape}) into "${spec.key}", preserving existing content`, () => {
+    const home = mkTmp(`mcp-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      const file = spec.file(env);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, seedText(id, spec.key, spec.shape));
+
+      const r = run(['--only', id, '--non-interactive', '--no-color'], { env });
+      assert.equal(r.status, 0, r.stderr);
+
+      const cfg = JSON.parse(readFileSync(file, 'utf8'));
+      const servers = cfg[spec.key];
+      assert.ok(servers['eap-runtime'], `${id}: eap-runtime registered`);
+      assert.ok(servers['eap-context'], `${id}: eap-context registered`);
+      assert.ok(servers['other-server'], `${id}: pre-existing server preserved`);
+
+      if (spec.shape === 'command-array-local') {
+        // opencode: single command ARRAY + type:local + enabled:true, no args key.
+        assert.equal(servers['eap-runtime'].type, 'local');
+        assert.equal(servers['eap-runtime'].enabled, true);
+        assert.equal(servers['eap-runtime'].command[0], 'node');
+        assert.match(servers['eap-runtime'].command[1], /eap-runtime\/src\/mcp\.mjs$/);
+        assert.equal(servers['eap-context'].command[0], 'python3');
+        assert.match(servers['eap-context'].command[1], /eap_context\/mcp\.py$/);
+        // GLOBAL install: no pinned project-root arg (command is exactly [py, mcp.py]).
+        assert.equal(servers['eap-context'].command.length, 2, `${id}: eap-context has no project-root arg`);
+        // Sibling keys (JSONC $schema + plugin array) survive the merge.
+        assert.equal(cfg.$schema, 'https://opencode.ai/config.json', 'opencode: $schema preserved');
+        assert.deepEqual(cfg.plugin, ['some-plugin'], 'opencode: plugin array preserved');
+      } else {
+        // cursor / antigravity: command STRING + args ARRAY, no type key.
+        assert.equal(servers['eap-runtime'].command, 'node');
+        assert.match(servers['eap-runtime'].args[0], /eap-runtime\/src\/mcp\.mjs$/);
+        assert.equal(servers['eap-context'].command, 'python3');
+        assert.match(servers['eap-context'].args[0], /eap_context\/mcp\.py$/);
+        // GLOBAL install: no pinned project-root arg (args is exactly [mcp.py]).
+        assert.equal(servers['eap-context'].args.length, 1, `${id}: eap-context has no project-root arg`);
+      }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+test('native MCP (json): --no-runtime and --no-context each drop the matching server (cursor)', () => {
+  const home = mkTmp('mcp-opt');
+  const env = sandboxEnv(home);
+  try {
+    const file = join(env.HOME, '.cursor', 'mcp.json');
+    run(['--only', 'cursor', '--non-interactive', '--no-color', '--no-runtime'], { env });
+    let servers = JSON.parse(readFileSync(file, 'utf8')).mcpServers;
+    assert.ok(!servers['eap-runtime'], 'runtime dropped via --no-runtime');
+    assert.ok(servers['eap-context'], 'context still registered');
+
+    rmSync(file, { force: true });
+    run(['--only', 'cursor', '--non-interactive', '--no-color', '--no-context'], { env });
+    servers = JSON.parse(readFileSync(file, 'utf8')).mcpServers;
+    assert.ok(servers['eap-runtime'], 'runtime still registered');
+    assert.ok(!servers['eap-context'], 'context dropped via --no-context');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('native MCP (json): --dry-run --only cursor prints the planned merge but writes no mcp.json', () => {
+  const home = mkTmp('mcp-dry');
+  const env = sandboxEnv(home);
+  try {
+    const r = run(['--dry-run', '--only', 'cursor', '--non-interactive', '--no-color'], { env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /mcpServers/);
+    assert.match(r.stdout, /eap-runtime/);
+    assert.match(r.stdout, /eap-context/);
+    assert.ok(!existsSync(join(env.HOME, '.cursor', 'mcp.json')), 'dry-run must not write mcp.json');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('native MCP (json): --uninstall removes only the eap entries, leaving other servers + sibling keys intact', () => {
+  const home = mkTmp('mcp-uninst');
+  const env = sandboxEnv(home);
+  try {
+    const file = join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, seedText('opencode', 'mcp', 'command-array-local'));
+
+    assert.equal(run(['--only', 'opencode', '--non-interactive', '--no-color'], { env }).status, 0);
+    let cfg = JSON.parse(readFileSync(file, 'utf8'));
+    assert.ok(cfg.mcp['eap-runtime'] && cfg.mcp['eap-context'], 'eap servers present after install');
+
+    const u = run(['--uninstall', '--non-interactive', '--no-color'], { env });
+    assert.equal(u.status, 0, u.stderr);
+    cfg = JSON.parse(readFileSync(file, 'utf8'));
+    assert.ok(!cfg.mcp['eap-runtime'], 'eap-runtime removed');
+    assert.ok(!cfg.mcp['eap-context'], 'eap-context removed');
+    assert.ok(cfg.mcp['other-server'], 'unrelated server preserved');
+    assert.equal(cfg.$schema, 'https://opencode.ai/config.json', '$schema preserved');
+    assert.deepEqual(cfg.plugin, ['some-plugin'], 'plugin array preserved');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// CLI agents (codex/grok/hermes). We cannot assume the real CLIs accept these
+// exact args in a sandbox, so we exercise the no-bin fallback (PATH neutralized
+// -> bin absent) and the dry-run printed command.
+const CLI_MCP_AGENTS = { codex: 'dashdash', grok: 'dashdash', hermes: 'hermes' };
+
+for (const [id, flavor] of Object.entries(CLI_MCP_AGENTS)) {
+  test(`native MCP (cli): --only ${id} with the bin absent prints a manual note and exits 0 (no crash)`, () => {
+    const home = mkTmp(`mcp-cli-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      const r = run(['--only', id, '--non-interactive', '--no-color'], { env });
+      assert.equal(r.status, 0, r.stderr);
+      // Voice still installed (fs only, PATH-independent).
+      assert.match(r.stdout, new RegExp(id));
+      // Manual fallback surfaced (bin not on PATH) with the copy-pasteable command.
+      assert.match(r.stdout + r.stderr, /register manually|not found on PATH/i);
+      assert.match(r.stdout, /mcp add eap-runtime/);
+      assert.doesNotMatch(r.stdout, /PLANNED/);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test(`native MCP (cli): --dry-run --only ${id} prints the exact registration command`, () => {
+    const home = mkTmp(`mcp-cli-dry-${id}`);
+    const env = sandboxEnv(home);
+    try {
+      const r = run(['--dry-run', '--only', id, '--non-interactive', '--no-color'], { env });
+      assert.equal(r.status, 0, r.stderr);
+      if (flavor === 'hermes') {
+        assert.match(r.stdout, new RegExp(`${id} mcp add eap-runtime --command node --args`));
+        assert.match(r.stdout, new RegExp(`${id} mcp add eap-context --command python3 --args`));
+      } else {
+        assert.match(r.stdout, new RegExp(`${id} mcp add eap-runtime -- node `));
+        assert.match(r.stdout, new RegExp(`${id} mcp add eap-context -- python3 `));
+      }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+test('--only accepts a comma-separated list (codex,opencode) without exiting 2', () => {
+  const home = mkTmp('mcp-comma');
+  const env = sandboxEnv(home);
+  try {
+    const r = run(['--only', 'codex,opencode', '--non-interactive', '--no-color'], { env });
+    assert.equal(r.status, 0, r.stderr);
+    // Both agents were acted on.
+    assert.match(r.stdout, /codex/i);
+    assert.match(r.stdout, /opencode/i);
+    // opencode's MCP config landed (JSON agent, PATH-independent).
+    const cfg = JSON.parse(readFileSync(join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc'), 'utf8'));
+    assert.ok(cfg.mcp['eap-runtime'] && cfg.mcp['eap-context'], 'opencode eap servers registered');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('--only with only commas/whitespace yields zero ids and exits 2', () => {
+  const r = run(['--only', ' , ', '--non-interactive', '--no-color']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /at least one agent id|requires/i);
 });

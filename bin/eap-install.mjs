@@ -57,17 +57,36 @@ const HOOK_EVENTS = [
 ];
 
 // ── Provider roster ─────────────────────────────────────────────────────────
-// The same 35-provider id/label/detect matrix as the TLDR installer, reused as
-// the EAP roster. `wired: true` marks a provider EAP installs END-TO-END today;
-// every other row is detected and reported as "planned" — no false claims.
+// The id/label/detect matrix mirrored from the TLDR installer, reused as the
+// EAP roster (37 rows). `wired: true` marks a provider EAP installs END-TO-END
+// today (all three layers). A `native` field marks a provider that gets its
+// EAP-Voice rule written natively into its global always-on rules file
+// (`native.voice`), even though its MCP layers are not yet wired — reported as
+// "voice", never "end-to-end". `native.voice: null` means the agent has no
+// global rules file (per-repo only, e.g. cursor). Every remaining row is
+// detected and reported as "planned" — no false claims.
+//
+// `native.voice` sentinels resolved by resolveNativeVoice(): `$HOME` (home dir),
+// `$XDG_CONFIG_HOME` (env or ~/.config), `$HERMES_HOME` (env or ~/.hermes).
+//
+// `native.mcp` (present only on MCP-capable native agents) describes HOW to
+// register the two EAP MCP servers for that agent (installMcpNative):
+//   kind: 'cli-dashdash'  -> `<bin> mcp add <name> -- <command> <args…>`   (codex, grok)
+//   kind: 'cli-hermes'    -> `<bin> mcp add <name> --command <command> --args <args…>` (hermes)
+//   kind: 'json'          -> merge into a JSON/JSONC file at `file` under key `key`;
+//                            shape 'command-args'         -> { command, args }  (cursor, antigravity)
+//                            shape 'command-array-local'  -> { type:'local', command:[cmd,…args], enabled:true } (opencode)
+// pi has NO native.mcp — Pi ships npm extensions, not MCP, so it stays Voice-only.
 const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',        detect: 'command:claude', wired: true },
   { id: 'gemini',     label: 'Gemini CLI',         detect: 'command:gemini' },
-  { id: 'opencode',   label: 'opencode',           detect: 'command:opencode' },
+  { id: 'opencode',   label: 'opencode',           detect: 'command:opencode', native: { voice: '$XDG_CONFIG_HOME/opencode/AGENTS.md', mcp: { kind: 'json', file: '$XDG_CONFIG_HOME/opencode/opencode.jsonc', key: 'mcp', shape: 'command-array-local' } } },
   { id: 'openclaw',   label: 'OpenClaw',           detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
-  { id: 'hermes',     label: 'Hermes Agent',       detect: 'command:hermes' },
-  { id: 'codex',      label: 'Codex CLI',          detect: 'command:codex' },
-  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor||macapp:Cursor' },
+  { id: 'hermes',     label: 'Hermes Agent',       detect: 'command:hermes', native: { voice: '$HERMES_HOME/SOUL.md', mcp: { kind: 'cli-hermes', bin: 'hermes' } } },
+  { id: 'codex',      label: 'Codex CLI',          detect: 'command:codex', native: { voice: '$HOME/.codex/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'codex' } } },
+  { id: 'pi',         label: 'Pi Coding Agent',    detect: 'command:pi', native: { voice: '$HOME/.pi/agent/AGENTS.md' } },
+  { id: 'grok',       label: 'Grok Build CLI',     detect: 'command:grok', native: { voice: '$HOME/.grok/AGENTS.md', mcp: { kind: 'cli-dashdash', bin: 'grok' } } },
+  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor||macapp:Cursor', native: { voice: null, mcp: { kind: 'json', file: '$HOME/.cursor/mcp.json', key: 'mcpServers', shape: 'command-args' } } },
   { id: 'windsurf',   label: 'Windsurf',           detect: 'command:windsurf||macapp:Windsurf' },
   { id: 'cline',      label: 'Cline',              detect: 'vscode-ext:cline' },
   { id: 'continue',   label: 'Continue',           detect: 'vscode-ext:continue.continue||vscode-ext:continue' },
@@ -95,7 +114,7 @@ const PROVIDERS = [
   { id: 'replit',     label: 'Replit Agent',       detect: 'command:replit' },
   { id: 'junie',      label: 'JetBrains Junie',    detect: 'jetbrains-plugin:junie', soft: true },
   { id: 'qoder',      label: 'Qoder',              detect: 'dir:$HOME/.qoder', soft: true },
-  { id: 'antigravity',label: 'Google Antigravity', detect: 'dir:$HOME/.gemini/antigravity', soft: true },
+  { id: 'antigravity',label: 'Google Antigravity', detect: 'dir:$HOME/.gemini/antigravity', soft: true, native: { voice: '$HOME/.gemini/config/AGENTS.md', mcp: { kind: 'json', file: '$HOME/.gemini/config/mcp_config.json', key: 'mcpServers', shape: 'command-args' } } },
 ];
 
 // ── argv ────────────────────────────────────────────────────────────────────
@@ -124,7 +143,13 @@ function parseArgs(argv) {
       case '--only': {
         const v = argv[++i];
         if (!v || v.startsWith('--')) die('error: --only requires an agent id (see --list)');
-        opts.only.push(v === 'aider' ? 'aider-desk' : v);
+        // Accept both comma lists (`--only a,b`) and repeated flags (`--only a
+        // --only b`), mirroring the TLDR installer. Trim + drop empties so a
+        // stray comma (`--only a,`) doesn't inject a blank id.
+        const ids = v.split(',').map((s) => s.trim()).filter(Boolean)
+          .map((s) => (s === 'aider' ? 'aider-desk' : s));
+        if (ids.length === 0) die('error: --only requires at least one agent id (see --list)');
+        opts.only.push(...ids);
         break;
       }
       case '--config-dir': {
@@ -226,13 +251,55 @@ function detectMatch(spec) {
 }
 
 // ── MCP server descriptors ──────────────────────────────────────────────────
-// The exact commands EAP registers. eap-context receives the project root as
-// argv[1] (process.cwd() at install time — the project the MCP will index).
+// The exact commands EAP registers. When `projectRoot` is given (Claude Code,
+// installed against a specific checkout) eap-context receives it as argv[1] — the
+// project the MCP will index. For the GLOBAL native installs `projectRoot` is
+// omitted: mcp.py then defaults its root to "." (the agent's runtime cwd — the
+// project it is actually working in — which is better than pinning the
+// install-time cwd for a machine-wide registration).
 function mcpServers(opts, projectRoot) {
   const out = {};
   if (opts.runtime) out['eap-runtime'] = { type: 'stdio', command: 'node', args: [RUNTIME_MCP] };
-  if (opts.context) out['eap-context'] = { type: 'stdio', command: 'python3', args: [CONTEXT_MCP, projectRoot] };
+  if (opts.context) {
+    const args = projectRoot ? [CONTEXT_MCP, projectRoot] : [CONTEXT_MCP];
+    out['eap-context'] = { type: 'stdio', command: 'python3', args };
+  }
   return out;
+}
+
+// ── EAP-Voice managed block ──────────────────────────────────────────────────
+// Single source of truth for the Voice block body: the heading + the verbatim
+// EAP-VOICE.md rule. Shared by installClaude (CLAUDE.md) and installVoiceNative
+// (codex/opencode/pi/grok/antigravity/hermes rules files). Returns null (and
+// warns) if the rule file cannot be read.
+function buildVoiceBody(warn) {
+  try { return '# EAP-Voice — verdict-first output\n\n' + fs.readFileSync(VOICE_RULE, 'utf8').trimEnd(); }
+  catch (e) { if (typeof warn === 'function') warn(`  cannot read Voice rule (${VOICE_RULE}): ${e.message}`); return null; }
+}
+
+// Resolve an env-aware path sentinel to an absolute path. Honors
+// $XDG_CONFIG_HOME (env or ~/.config), $HERMES_HOME (env or ~/.hermes), and
+// $HOME/~. Shared by resolveNativeVoice (rules files) and installMcpNative (MCP
+// config files) so both read the same environment consistently.
+function resolveSentinelPath(spec) {
+  if (spec == null) return null;
+  if (spec.startsWith('$XDG_CONFIG_HOME')) {
+    const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    return path.join(base, spec.slice('$XDG_CONFIG_HOME'.length).replace(/^[\\/]+/, ''));
+  }
+  if (spec.startsWith('$HERMES_HOME')) {
+    const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
+    return path.join(base, spec.slice('$HERMES_HOME'.length).replace(/^[\\/]+/, ''));
+  }
+  return expandHome(spec);
+}
+
+// Resolve a provider's native EAP-Voice rules-file path. Returns null when the
+// provider has no global rules file (native.voice === null, e.g. cursor).
+function resolveNativeVoice(prov) {
+  const spec = prov.native && prov.native.voice;
+  if (!spec) return null; // null (per-repo only) or no native voice at all
+  return resolveSentinelPath(spec);
 }
 
 // ── Claude Code install (END-TO-END) ────────────────────────────────────────
@@ -255,9 +322,7 @@ function installClaude(ctx) {
   say('→ Claude Code — installing all three EAP layers');
 
   // 1. Voice rule.
-  let voiceBody;
-  try { voiceBody = '# EAP-Voice — verdict-first output\n\n' + fs.readFileSync(VOICE_RULE, 'utf8').trimEnd(); }
-  catch (e) { voiceBody = null; warn(`  cannot read Voice rule (${VOICE_RULE}): ${e.message}`); }
+  const voiceBody = buildVoiceBody(warn);
 
   if (opts.dryRun) {
     note(`  [1/3] Voice: write managed ${VOICE_BEGIN} block into ${claudeMd}`);
@@ -333,6 +398,156 @@ function backupOnce(p) {
   }
 }
 
+// ── Native EAP-Voice install (non-Claude AGENTS.md / SOUL.md agents) ─────────
+// Writes the SAME managed <!-- eap-voice:begin --> … block installClaude writes,
+// into the agent's global always-on rules file (native.voice). Voice ONLY — MCP
+// registration for these agents is a separate, later step. For a per-repo agent
+// (native.voice === null, e.g. cursor) there is no global file: print the
+// per-repo note and record it handled.
+function installVoiceNative(ctx, prov) {
+  const { opts, say, note, ok, warn, results } = ctx;
+  const target = resolveNativeVoice(prov);
+
+  // Per-repo only (cursor): no global rules file to write.
+  if (target == null) {
+    say(`→ ${prov.label} — EAP-Voice is per-repo (no global rules file)`);
+    note('  cursor-agent only honors a per-project AGENTS.md; drop one carrying the');
+    note(`  ${VOICE_BEGIN} block at each repo root you use it in.`);
+    if (opts.dryRun) results.dryRun.push(prov.id);
+    else results.installed.push(prov.id);
+    return;
+  }
+
+  const voiceBody = buildVoiceBody(warn);
+  say(`→ ${prov.label} — installing EAP-Voice (native)`);
+  if (voiceBody == null) { results.failed.push([prov.id, 'Voice rule unreadable']); return; }
+
+  if (opts.dryRun) {
+    note(`  Voice: write managed ${VOICE_BEGIN} block into ${target}`);
+    results.dryRun.push(prov.id);
+    return;
+  }
+
+  const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+  const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  backupOnce(target);
+  // atomicWrite (temp + rename) is symlink-safe — never write through a planted
+  // rules-file symlink, matching installClaude.
+  atomicWrite(target, next, 0o644);
+  ok(`  Voice rule written to ${target}`);
+  results.installed.push(prov.id);
+}
+
+// ── Native MCP install (register eap-runtime + eap-context) ──────────────────
+// Registers the two EAP MCP servers into an MCP-capable native agent, using the
+// per-agent mechanism declared in prov.native.mcp. Called right after
+// installVoiceNative so a native agent gets Voice THEN MCP. Providers without a
+// native.mcp descriptor (pi) are a no-op. Honors --no-runtime / --no-context
+// (register only the enabled servers) and --dry-run (print, write nothing).
+
+// Minimal display quoting for a printed manual/dry-run command line: quote an
+// arg only when it holds a shell-active char, so the printout is copy-pasteable.
+function shDisplayQuote(s) {
+  s = String(s);
+  return /[^\w@%+=:,./-]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s;
+}
+
+// Build the argv the agent CLI expects for one server (everything after the bin).
+function cliMcpArgv(kind, name, s) {
+  if (kind === 'cli-hermes') return ['mcp', 'add', name, '--command', s.command, '--args', ...s.args];
+  return ['mcp', 'add', name, '--', s.command, ...s.args]; // cli-dashdash
+}
+
+// Build the JSON value merged under the agent's MCP key for one server.
+function mcpJsonEntry(shape, s) {
+  if (shape === 'command-array-local') return { type: 'local', command: [s.command, ...s.args], enabled: true };
+  return { command: s.command, args: s.args }; // command-args
+}
+
+function installMcpNative(ctx, prov) {
+  const { opts, note } = ctx;
+  const desc = prov.native && prov.native.mcp;
+  if (!desc) return; // MCP not supported for this native agent (e.g. pi)
+  const servers = mcpServers(opts); // no projectRoot -> eap-context defaults root to "."
+  if (Object.keys(servers).length === 0) { note('  MCP: both servers disabled (--no-runtime --no-context) — skipped'); return; }
+  if (desc.kind === 'cli-dashdash' || desc.kind === 'cli-hermes') installMcpCli(ctx, prov, desc, servers);
+  else if (desc.kind === 'json') installMcpJson(ctx, prov, desc, servers);
+}
+
+function installMcpCli(ctx, prov, desc, servers) {
+  const { opts, note, ok, warn, results } = ctx;
+  const bin = desc.bin;
+  const present = hasCmd(bin);
+  for (const [name, s] of Object.entries(servers)) {
+    const argv = cliMcpArgv(desc.kind, name, s);
+    const printable = `${bin} ${argv.map(shDisplayQuote).join(' ')}`;
+    if (opts.dryRun) { note(`  MCP: ${printable}`); continue; }
+    if (!present) {
+      warn(`  ${bin} not found on PATH — cannot auto-register ${name}.`);
+      note(`  To register manually once ${bin} is installed, run: ${printable}`);
+      continue;
+    }
+    const r = child_process.spawnSync(bin, argv, { stdio: 'inherit' });
+    if ((r.status || 0) !== 0) { warn(`  ${bin} mcp add ${name} failed`); results.failed.push([`${prov.id}-mcp`, `${name} registration failed`]); }
+    else ok(`  MCP registered via '${bin} mcp add': ${name}`);
+  }
+}
+
+function installMcpJson(ctx, prov, desc, servers) {
+  const { opts, note, ok, warn, results } = ctx;
+  const file = resolveSentinelPath(desc.file);
+  const key = desc.key;
+  const names = Object.keys(servers);
+
+  if (opts.dryRun) {
+    note(`  MCP: merge ${names.join(' + ')} into ${file} (key "${key}")`);
+    for (const [name, s] of Object.entries(servers)) note(`         ${name}: ${JSON.stringify(mcpJsonEntry(desc.shape, s))}`);
+    return;
+  }
+
+  // readSettings is JSONC-tolerant (opencode.jsonc carries $schema + a plugin
+  // array + comments); parse, MERGE our two keys, write back. Existing servers
+  // and sibling keys survive; a null return means the file is unrecoverable.
+  const cfg = readSettings(file);
+  if (cfg === null) { warn(`  ${file} unparseable — skipping MCP registration`); results.failed.push([`${prov.id}-mcp`, 'mcp file unparseable']); return; }
+  if (!cfg[key] || typeof cfg[key] !== 'object' || Array.isArray(cfg[key])) cfg[key] = {};
+  for (const [name, s] of Object.entries(servers)) cfg[key][name] = mcpJsonEntry(desc.shape, s);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  backupOnce(file);
+  writeSettings(file, cfg);
+  ok(`  MCP registered in ${file}: ${names.join(', ')}`);
+}
+
+// Remove the two EAP MCP registrations from a native agent (uninstall). CLI
+// agents get `<bin> mcp remove <name>` (idempotent; skipped when the bin is
+// absent); JSON agents get the two keys deleted, leaving all other servers
+// intact. Honors --dry-run.
+function uninstallMcpNative(ctx, prov) {
+  const { opts, note, ok } = ctx;
+  const desc = prov.native && prov.native.mcp;
+  if (!desc) return;
+  const names = ['eap-runtime', 'eap-context'];
+  if (desc.kind === 'cli-dashdash' || desc.kind === 'cli-hermes') {
+    const bin = desc.bin;
+    if (opts.dryRun) { for (const n of names) note(`  ${bin} mcp remove ${n}`); return; }
+    if (!hasCmd(bin)) return; // no CLI on PATH — nothing to do
+    for (const n of names) child_process.spawnSync(bin, ['mcp', 'remove', n], { stdio: 'ignore' });
+    ok(`  removed EAP MCP servers from ${prov.label} via '${bin} mcp remove'`);
+  } else if (desc.kind === 'json') {
+    const file = resolveSentinelPath(desc.file);
+    if (!fs.existsSync(file)) return;
+    const cfg = readSettings(file);
+    if (!cfg || !cfg[desc.key] || typeof cfg[desc.key] !== 'object') return;
+    let removed = 0;
+    for (const n of names) if (cfg[desc.key][n]) { delete cfg[desc.key][n]; removed++; }
+    if (removed === 0) return;
+    if (Object.keys(cfg[desc.key]).length === 0) delete cfg[desc.key];
+    if (!opts.dryRun) writeSettings(file, cfg);
+    ok(`  removed ${removed} EAP MCP entr${removed === 1 ? 'y' : 'ies'} from ${prov.label} (${file})`);
+  }
+}
+
 // ── Planned providers (detected, honestly not wired) ────────────────────────
 function planProvider(ctx, prov) {
   const { note } = ctx;
@@ -347,7 +562,7 @@ function planProvider(ctx, prov) {
 // ── uninstall (Claude Code) ─────────────────────────────────────────────────
 function uninstall(ctx) {
   const { opts, configDir, say, note, ok, warn } = ctx;
-  say('EAP uninstall (Claude Code)');
+  say('EAP uninstall');
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
 
   const claudeMd = path.join(configDir, 'CLAUDE.md');
@@ -397,6 +612,30 @@ function uninstall(ctx) {
   // Layer-flags file.
   if (fs.existsSync(eapConfPath) && !opts.dryRun) { try { fs.unlinkSync(eapConfPath); } catch { /* best effort */ } }
 
+  // Native EAP-Voice blocks (codex/opencode/pi/grok/antigravity/hermes). Strip
+  // exactly our fenced block from each agent's global rules file, preserving all
+  // surrounding user content; delete the file only when nothing else remains.
+  // cursor (native.voice === null) is per-repo — no global file to touch.
+  for (const prov of PROVIDERS) {
+    if (!prov.native) continue;
+    const target = resolveNativeVoice(prov);
+    if (target == null || !fs.existsSync(target)) continue;
+    const { text, stripped } = stripFencedBlock(fs.readFileSync(target, 'utf8'), VOICE_BEGIN, VOICE_END);
+    if (!stripped) continue;
+    if (!opts.dryRun) {
+      if (text === '') { try { fs.unlinkSync(target); } catch { /* best effort */ } }
+      else atomicWrite(target, text, 0o644); // symlink-safe, matches install
+    }
+    ok(text === '' ? `  removed ${target}` : `  stripped Voice block from ${prov.label} (${target})`);
+  }
+
+  // Native MCP registrations (codex/grok/hermes CLI + cursor/antigravity/opencode
+  // JSON). Remove only the two EAP servers; every other registered server and
+  // sibling config key is preserved.
+  for (const prov of PROVIDERS) {
+    if (prov.native && prov.native.mcp) uninstallMcpNative(ctx, prov);
+  }
+
   process.stdout.write('\n');
   ok('uninstall done.');
 }
@@ -406,16 +645,24 @@ function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.leng
 function printList(noColor) {
   const c = makeChalk(noColor);
   const wired = PROVIDERS.filter((p) => p.wired).length;
+  const voiceMcp = PROVIDERS.filter((p) => !p.wired && p.native && p.native.mcp).length;
+  const voiceOnly = PROVIDERS.filter((p) => !p.wired && p.native && !p.native.mcp).length;
+  const planned = PROVIDERS.length - wired - voiceMcp - voiceOnly;
   process.stdout.write(c.cyan('EAP provider matrix') + '\n\n');
   process.stdout.write(`  ${pad('ID', 13)} ${pad('AGENT', 22)} STATUS\n`);
   process.stdout.write(`  ${pad('--', 13)} ${pad('-----', 22)} ------\n`);
   for (const p of PROVIDERS) {
-    const status = p.wired ? c.green('end-to-end') : c.dim('planned');
+    let status;
+    if (p.wired) status = c.green('end-to-end (all 3)');
+    else if (p.native && p.native.mcp) status = c.green(p.native.voice === null ? 'voice(per-repo) + mcp' : 'voice + mcp');
+    else if (p.native) status = c.green('voice');
+    else status = c.dim('planned');
     const soft = p.soft ? c.dim(' (soft-detect)') : '';
     process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${status}${soft}\n`);
   }
   process.stdout.write('\n');
-  process.stdout.write(c.dim(`  ${wired} provider wired end-to-end (Claude Code); ${PROVIDERS.length - wired} detected + planned.\n`));
+  process.stdout.write(c.dim(`  ${wired} provider wired end-to-end (Claude Code, all 3 layers); ${voiceMcp} with native EAP-Voice + both MCP servers; ${voiceOnly} EAP-Voice only (no MCP); ${planned} detected + planned.\n`));
+  process.stdout.write(c.dim('  "voice + mcp" = the always-on EAP-Voice rule AND both EAP MCP servers are registered natively; cursor is voice(per-repo).\n'));
   process.stdout.write(c.dim('  Planned providers are detected and given a manual plan — never silently claimed as wired.\n'));
   process.stdout.write(c.dim('  Layers: Voice (always-on rule) + eap-runtime MCP + eap-context MCP + hook dispatcher.\n'));
 }
@@ -453,8 +700,15 @@ WHAT GETS INSTALLED (Claude Code, end-to-end)
   3. hooks       -> SessionStart / PreToolUse / PostToolUse / PreCompact in
                     <configDir>/settings.json, running src/hooks/eap-dispatch.mjs
 
+NATIVE AGENTS (EAP-Voice rule + both EAP MCP servers, registered natively)
+  codex, grok        -> Voice rule + '<bin> mcp add … -- <cmd> <args>'
+  hermes             -> Voice rule + 'hermes mcp add … --command <cmd> --args <args>'
+  opencode           -> Voice rule + 'mcp' key in opencode.jsonc (type:local)
+  cursor, antigravity-> MCP in ~/.cursor/mcp.json / ~/.gemini/config/mcp_config.json
+                        (cursor's Voice rule is per-repo AGENTS.md, MCP is global)
+  pi                 -> Voice rule only (Pi has no MCP; it uses npm extensions)
 Every other provider is detected and reported as "planned" — EAP does not claim
-to wire an agent it has not implemented end-to-end.
+to wire an agent it has not implemented. See --list for the full matrix.
 `);
 }
 
@@ -629,6 +883,7 @@ function runInstall(opts) {
       if (!detectMatch(prov.detect)) continue;
     }
     if (prov.wired) installClaude(ctx);
+    else if (prov.native) { installVoiceNative(ctx, prov); installMcpNative(ctx, prov); }
     else planProvider(ctx, prov);
     process.stdout.write('\n');
   }
@@ -636,7 +891,7 @@ function runInstall(opts) {
   // Summary.
   ctx.say('EAP done');
   if (ctx.results.dryRun.length) { process.stdout.write('  would install (dry run — nothing written):\n'); for (const a of ctx.results.dryRun) process.stdout.write(`    • ${a}\n`); }
-  if (ctx.results.installed.length) { ctx.ok('  installed (end-to-end):'); for (const a of ctx.results.installed) process.stdout.write(`    • ${a}\n`); }
+  if (ctx.results.installed.length) { ctx.ok('  installed (claude = all 3 layers; others = EAP-Voice):'); for (const a of ctx.results.installed) process.stdout.write(`    • ${a}\n`); }
   if (ctx.results.planned.length) { process.stdout.write('  planned (detected, manual):\n'); for (const a of ctx.results.planned) process.stdout.write(`    • ${a}\n`); }
   if (ctx.results.failed.length) { ctx.warn('  failed:'); for (const [id, why] of ctx.results.failed) process.stderr.write(`    • ${id} — ${why}\n`); }
   if (!ctx.results.installed.length && !ctx.results.planned.length && !ctx.results.failed.length && !ctx.results.dryRun.length) {
