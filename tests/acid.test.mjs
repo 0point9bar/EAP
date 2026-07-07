@@ -42,7 +42,10 @@ const SIGNAL_BEGIN = '<!-- eap-signal:begin -->';
 const SIGNAL_END = '<!-- eap-signal:end -->';
 
 function mkTmp(tag) { return mkdtempSync(join(tmpdir(), `eap-acid-${tag}-`)); }
-function run(args, env) { return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env }); }
+// env is REQUIRED to be a sandbox; if a caller ever omits it, fall back to a
+// module-level sandbox HOME rather than inheriting the real machine's env — a
+// missing sandbox must never let --uninstall touch real ~/.codex etc.
+function run(args, env) { return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: env || DEFAULT_SANDBOX_ENV }); }
 const both = (r) => (r.stdout || '') + (r.stderr || '');
 const countOf = (text, needle) => text.split(needle).length - 1;
 // A raw Node stack trace leaking to the console = an uncaught throw aborted the run.
@@ -63,6 +66,9 @@ function sandboxEnv(home, extra = {}) {
     ...extra,
   };
 }
+
+// Default sandbox env used when a run() call omits its own (belt-and-suspenders).
+const DEFAULT_SANDBOX_ENV = sandboxEnv(mkdtempSync(join(tmpdir(), 'eap-acid-default-')));
 
 // A Claude install pinned to a config-dir, fully sandboxed. Returns { dir, env }.
 function claudeSandbox(tag) {

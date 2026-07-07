@@ -14,8 +14,24 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const BIN = join(here, '..', 'bin', 'eap-install.mjs');
 
+// SAFETY: a module-level sandbox HOME is the DEFAULT env for every run() so no
+// test can ever touch the real machine's ~/.codex, ~/.grok, ~/.hermes, etc.
+// (the native-provider install/uninstall paths resolve via HOME, not just
+// --config-dir). PATH is neutralized so a real agent CLI (claude/codex/grok/
+// hermes) is never invoked — CLI-MCP paths take their no-bin/file fallback.
+// A single fixed HOME keeps install→uninstall pairs consistent within a test;
+// callers that need their own throwaway HOME pass an explicit `env` (it wins).
+const SANDBOX_HOME = mkdtempSync(join(tmpdir(), 'eap-testsandbox-'));
+const SANDBOX_ENV = {
+  ...process.env,
+  HOME: SANDBOX_HOME,
+  XDG_CONFIG_HOME: join(SANDBOX_HOME, 'xdg'),
+  HERMES_HOME: join(SANDBOX_HOME, 'hermes'),
+  CLAUDE_CONFIG_DIR: join(SANDBOX_HOME, 'claude'),
+  PATH: '/usr/bin:/bin',
+};
 function run(args, opts = {}) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', ...opts });
+  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: SANDBOX_ENV, ...opts });
 }
 function mkTmp(tag) { return mkdtempSync(join(tmpdir(), `eap-${tag}-`)); }
 
