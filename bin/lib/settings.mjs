@@ -21,6 +21,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// A plain, non-array object. Guards every mutation helper below so a
+// settings.json / .mcp.json / opencode.jsonc whose root (or `hooks`) is a bare
+// string / number / array never throws a TypeError that would abort the run.
+export function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
 // ── atomic write ────────────────────────────────────────────────────────────
 // Temp file on the SAME filesystem as the target (rename(2) is only atomic when
 // source and destination share a device), restrictive perms, then rename.
@@ -45,6 +52,9 @@ export function atomicWrite(dest, content, mode = 0o600) {
 // commas are removed in a final pass (JSONC tolerates them, JSON.parse doesn't).
 export function stripJsonComments(src) {
   if (typeof src !== 'string') return src;
+  // Strip a leading UTF-8 BOM (U+FEFF) — JSON.parse rejects it, but an editor
+  // may have written one into an otherwise valid settings file.
+  if (src.charCodeAt(0) === 0xFEFF) src = src.slice(1);
   let out = '';
   let i = 0;
   const n = src.length;
@@ -109,6 +119,9 @@ export function readSettings(p) {
   try { raw = fs.readFileSync(p, 'utf8'); }
   catch (e) { process.stderr.write(`eap: cannot read ${p}: ${e.message}\n`); return null; }
   if (!raw.trim()) return {};
+  // Strip a leading UTF-8 BOM before parsing — a BOM-prefixed but otherwise
+  // valid file must parse, not be treated as unrecoverable garbage.
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
   try { return JSON.parse(raw); } catch { /* fall through to JSONC */ }
   try { return JSON.parse(stripJsonComments(raw)); }
   catch (e) {
@@ -128,8 +141,8 @@ export function writeSettings(p, obj) {
 // preserve any object carrying an unrecognized-but-nonempty `type` (may be valid
 // in a newer Claude Code than this installer knows about). Every drop reported.
 export function validateHookFields(settings, warn) {
-  if (!settings || typeof settings !== 'object') return settings;
-  if (!settings.hooks || typeof settings.hooks !== 'object') return settings;
+  if (!isPlainObject(settings)) return settings;
+  if (!isPlainObject(settings.hooks)) return settings;
   const dropped = [];
   for (const ev of Object.keys(settings.hooks)) {
     const arr = settings.hooks[ev];
@@ -170,7 +183,12 @@ export function hasCommandHook(settings, event, marker) {
 // Idempotent push keyed on `marker` (a stable substring, e.g. the script
 // basename). Optional `matcher` scopes PreToolUse/PostToolUse to a tool name.
 export function addCommandHook(settings, event, opts) {
-  if (!settings.hooks) settings.hooks = {};
+  // Defensive: a non-plain-object root can't carry a hooks map — bail rather
+  // than throw a TypeError that would abort the run. A hooks field that is a
+  // string / number / array (not the expected event->entries object) is reset,
+  // since Claude Code's Zod would discard the whole file over it anyway.
+  if (!isPlainObject(settings)) return false;
+  if (!isPlainObject(settings.hooks)) settings.hooks = {};
   if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const marker = opts.marker || opts.command;
   if (hasCommandHook(settings, event, marker)) return false;
@@ -186,9 +204,9 @@ export function addCommandHook(settings, event, opts) {
 // Strip every entry whose any hook command mentions `marker`; empties events.
 // Preserves foreign / user-authored hooks untouched.
 export function removeCommandHooks(settings, marker) {
-  if (!settings || !settings.hooks) return 0;
+  if (!isPlainObject(settings) || !isPlainObject(settings.hooks)) return 0;
   validateHookFields(settings);
-  if (!settings.hooks) return 0;
+  if (!isPlainObject(settings.hooks)) return 0; // validate may have deleted the tree
   let removed = 0;
   for (const ev of Object.keys(settings.hooks)) {
     if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
@@ -205,36 +223,92 @@ export function removeCommandHooks(settings, marker) {
 }
 
 // ── marker-fenced block helpers (for CLAUDE.md / rules files) ────────────────
-// Insert or replace a managed block delimited by `begin`/`end` markers so the
-// same block can be updated idempotently and stripped cleanly on uninstall even
-// when the user has authored content both above and below it.
-export function upsertFencedBlock(existing, begin, end, body) {
-  const block = `${begin}\n${body.replace(/\n+$/, '')}\n${end}\n`;
-  if (existing == null || existing.trim() === '') return block;
-  const b = existing.indexOf(begin);
-  const e = existing.indexOf(end);
-  if (b !== -1 && e !== -1 && e > b) {
-    const before = existing.slice(0, b);
-    const after = existing.slice(e + end.length).replace(/^\n+/, '');
-    let next = before.replace(/\s+$/, '');
-    next += (next ? '\n\n' : '') + block.replace(/\n+$/, '\n');
-    if (after.trim()) next += '\n' + after;
-    return next.replace(/\n*$/, '\n');
+// A "well-formed block" is an END marker matched to its NEAREST PRECEDING BEGIN.
+// This pairing is the data-loss-safe core the whole installer relies on: an
+// orphan BEGIN (no following END), an orphan END (no preceding BEGIN), and an
+// END-before-BEGIN sequence are all left in place as stray markers — surrounding
+// user text is NEVER removed, and a stray marker is never adopted as a block
+// boundary that would swallow the user content between it and the real block.
+
+// Locate every well-formed [begin..end] block, nearest-preceding-BEGIN paired,
+// non-overlapping, in document order. Returns [{ begin, end }] index ranges
+// where `end` is EXCLUSIVE (one past the end marker).
+function findFencedBlocks(body, begin, end) {
+  const blocks = [];
+  let searchFrom = 0;
+  while (true) {
+    const endPos = body.indexOf(end, searchFrom);
+    if (endPos === -1) break;
+    const beginPos = body.lastIndexOf(begin, endPos);
+    if (beginPos === -1 || beginPos < searchFrom) {
+      // END with no BEGIN in the unprocessed region — leave it, skip past it.
+      searchFrom = endPos + end.length;
+      continue;
+    }
+    blocks.push({ begin: beginPos, end: endPos + end.length });
+    searchFrom = endPos + end.length;
   }
-  const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-  return existing + sep + block;
+  return blocks;
 }
 
+// Concatenate surviving segments, collapsing blank lines at each removed-block
+// seam (between adjacent segments) to a single newline — matching the historical
+// single-block behavior. User text NOT at a seam is left byte-for-byte.
+function joinCollapsingSeams(segments) {
+  let text = '';
+  for (let i = 0; i < segments.length; i++) {
+    let seg = segments[i];
+    if (i > 0) seg = seg.replace(/^\n+/, '\n');                  // leading, at a cut
+    if (i < segments.length - 1) seg = seg.replace(/\n+$/, '\n'); // trailing, at a cut
+    text += seg;
+  }
+  return text;
+}
+
+// Insert or replace a managed block delimited by `begin`/`end`. UPSERT semantics:
+//   • No well-formed block (plain text, or only orphan / end-before-begin
+//     markers) → append a fresh block; every stray marker and user line survives.
+//   • One or more well-formed blocks → replace the LAST block's body with the
+//     current `body` and remove any earlier duplicate blocks (collapse to one),
+//     preserving all surrounding user text. Byte-identical ⇒ no-op (idempotent),
+//     so a reinstall refreshes a stale block instead of leaving it or appending.
+export function upsertFencedBlock(existing, begin, end, body) {
+  // blockCore carries NO trailing newline: the newline after the end marker
+  // belongs to the surrounding file so an in-place replace is byte-idempotent.
+  const blockCore = `${begin}\n${body.replace(/\n+$/, '')}\n${end}`;
+  const fencedBlock = blockCore + '\n';
+  if (existing == null || existing.trim() === '') return fencedBlock;
+  const blocks = findFencedBlocks(existing, begin, end);
+  if (blocks.length === 0) {
+    // Append after the user's content; leave any orphan/unpaired marker intact.
+    const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
+    return existing + sep + fencedBlock;
+  }
+  // Keep the LAST block (its span is replaced with the fresh body); drop every
+  // earlier duplicate block, collapsing the blank lines at each removed seam.
+  const last = blocks[blocks.length - 1];
+  const segments = [existing.slice(0, blocks[0].begin)];
+  for (let k = 1; k < blocks.length; k++) segments.push(existing.slice(blocks[k - 1].end, blocks[k].begin));
+  const before = joinCollapsingSeams(segments); // text up to `last.begin`, earlier blocks gone
+  const after = existing.slice(last.end);        // text after the kept block, byte-preserved
+  return before + blockCore + after;
+}
+
+// Strip EVERY well-formed block (nearest-preceding pairing), preserving all
+// surrounding user text and leaving orphan/unpaired markers in place. Returns
+// { text, stripped }; `text` is '' when only whitespace survives (caller deletes
+// the file). Byte-for-byte user content is retained apart from collapsed seams.
 export function stripFencedBlock(existing, begin, end) {
   if (existing == null) return { text: null, stripped: false };
-  const b = existing.indexOf(begin);
-  const e = existing.indexOf(end);
-  if (b === -1 || e === -1 || e <= b) return { text: existing, stripped: false };
-  const before = existing.slice(0, b).replace(/\n+$/, '\n');
-  const after = existing.slice(e + end.length).replace(/^\n+/, '\n');
-  let next = (before + after).trimEnd();
-  next = next ? next + '\n' : '';
-  return { text: next, stripped: true };
+  const blocks = findFencedBlocks(existing, begin, end);
+  if (blocks.length === 0) return { text: existing, stripped: false };
+  const segments = [];
+  let cursor = 0;
+  for (const b of blocks) { segments.push(existing.slice(cursor, b.begin)); cursor = b.end; }
+  segments.push(existing.slice(cursor));
+  let text = joinCollapsingSeams(segments).trimEnd();
+  text = text ? text + '\n' : '';
+  return { text, stripped: true };
 }
 
 // ── claudeConfigDir ─────────────────────────────────────────────────────────

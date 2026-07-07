@@ -29,7 +29,7 @@ import readline from 'node:readline';
 import {
   readSettings, writeSettings, validateHookFields,
   addCommandHook, removeCommandHooks,
-  upsertFencedBlock, stripFencedBlock, atomicWrite,
+  upsertFencedBlock, stripFencedBlock, atomicWrite, isPlainObject,
 } from './lib/settings.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -251,20 +251,27 @@ function detectMatch(spec) {
 }
 
 // ── MCP server descriptors ──────────────────────────────────────────────────
-// The exact commands EAP registers. When `projectRoot` is given (Claude Code,
-// installed against a specific checkout) eap-context receives it as argv[1] — the
-// project the MCP will index. For the GLOBAL native installs `projectRoot` is
-// omitted: mcp.py then defaults its root to "." (the agent's runtime cwd — the
-// project it is actually working in — which is better than pinning the
-// install-time cwd for a machine-wide registration).
-function mcpServers(opts, projectRoot) {
+// The exact commands EAP registers. eap-context is registered WITHOUT a pinned
+// project-root arg: mcp.py defaults its root to "." (the agent's runtime cwd —
+// the project it is actually working in), which is correct for both a global
+// native registration AND Claude Code's global <configDir>/.mcp.json. Pinning
+// the install-time cwd would wrongly lock a machine-wide registration to
+// whatever directory the installer happened to run in.
+function mcpServers(opts) {
   const out = {};
   if (opts.runtime) out['eap-runtime'] = { type: 'stdio', command: 'node', args: [RUNTIME_MCP] };
-  if (opts.context) {
-    const args = projectRoot ? [CONTEXT_MCP, projectRoot] : [CONTEXT_MCP];
-    out['eap-context'] = { type: 'stdio', command: 'python3', args };
-  }
+  if (opts.context) out['eap-context'] = { type: 'stdio', command: 'python3', args: [CONTEXT_MCP] };
   return out;
+}
+
+// Guarded write: run an fs write and return null on success, or the error
+// message on failure — instead of throwing. Lets one unwritable target (a
+// read-only / EROFS / EACCES / ENOENT config or rules dir, where atomicWrite's
+// mkdtempSync throws) record a clean per-agent failure so the multi-agent run
+// continues to the next provider rather than aborting on a raw stack trace.
+function tryWrite(fn) {
+  try { fn(); return null; }
+  catch (e) { return (e && e.message) || String(e); }
 }
 
 // ── EAP-Voice managed block ──────────────────────────────────────────────────
@@ -305,12 +312,11 @@ function resolveNativeVoice(prov) {
 // ── Claude Code install (END-TO-END) ────────────────────────────────────────
 function installClaude(ctx) {
   const { opts, configDir, say, note, ok, warn, results } = ctx;
-  const projectRoot = process.cwd();
   const claudeMd = path.join(configDir, 'CLAUDE.md');
   const settingsPath = path.join(configDir, 'settings.json');
   const mcpPath = path.join(configDir, '.mcp.json');
   const eapConfPath = path.join(configDir, '.eap.json');
-  const servers = mcpServers(opts, projectRoot);
+  const servers = mcpServers(opts);
   const serverNames = Object.keys(servers);
   const node = process.execPath;
   // MCP mechanism: prefer `claude mcp add` when the CLI is present AND we are
@@ -335,16 +341,21 @@ function installClaude(ctx) {
     return;
   }
 
-  // 1. Voice rule → CLAUDE.md (managed marker-fenced block).
+  // 1. Voice rule → CLAUDE.md (managed marker-fenced block). The write is guarded
+  // so a read-only configDir records a clean failure and MCP/hooks are still
+  // attempted rather than aborting the whole multi-agent run with a stack trace.
   if (voiceBody != null) {
-    const existing = fs.existsSync(claudeMd) ? fs.readFileSync(claudeMd, 'utf8') : null;
-    const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
-    fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
-    backupOnce(claudeMd);
-    // atomicWrite (temp + rename) is symlink-safe, unlike fs.writeFileSync which
-    // would follow a planted CLAUDE.md symlink and write through to its target.
-    atomicWrite(claudeMd, next, 0o644);
-    ok(`  [1/3] Voice rule written to ${claudeMd}`);
+    const err = tryWrite(() => {
+      const existing = fs.existsSync(claudeMd) ? fs.readFileSync(claudeMd, 'utf8') : null;
+      const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
+      fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
+      backupOnce(claudeMd);
+      // atomicWrite (temp + rename) is symlink-safe, unlike fs.writeFileSync which
+      // would follow a planted CLAUDE.md symlink and write through to its target.
+      atomicWrite(claudeMd, next, 0o644);
+    });
+    if (err) { warn(`  [1/3] Voice write failed (${claudeMd}): ${err}`); results.failed.push(['claude-voice', err]); }
+    else ok(`  [1/3] Voice rule written to ${claudeMd}`);
   }
 
   // 2. MCP servers.
@@ -360,33 +371,49 @@ function installClaude(ctx) {
   } else {
     const cfg = readSettings(mcpPath);
     if (cfg === null) { warn(`  ${mcpPath} unparseable — skipping MCP registration`); results.failed.push(['claude-mcp', 'mcp file unparseable']); }
-    else {
-      if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') cfg.mcpServers = {};
-      for (const [name, s] of Object.entries(servers)) cfg.mcpServers[name] = s;
-      backupOnce(mcpPath);
-      writeSettings(mcpPath, cfg);
-      ok(`  [2/3] MCP registered in ${mcpPath}: ${serverNames.join(', ')}`);
+    else if (!isPlainObject(cfg)) {
+      // Valid JSON but a non-object root (array / bare string / number) can't hold
+      // an mcpServers map: mutating it would crash (string) or silently vanish on
+      // JSON.stringify (array). Leave it byte-for-byte untouched.
+      warn(`  ${mcpPath} is not a JSON object; leaving it untouched.`); results.failed.push(['claude-mcp', 'mcp file is not a JSON object']);
+    } else {
+      const err = tryWrite(() => {
+        if (!isPlainObject(cfg.mcpServers)) cfg.mcpServers = {};
+        for (const [name, s] of Object.entries(servers)) cfg.mcpServers[name] = s;
+        backupOnce(mcpPath);
+        writeSettings(mcpPath, cfg);
+      });
+      if (err) { warn(`  [2/3] MCP write failed (${mcpPath}): ${err}`); results.failed.push(['claude-mcp', err]); }
+      else ok(`  [2/3] MCP registered in ${mcpPath}: ${serverNames.join(', ')}`);
     }
   }
 
   // 3. Hooks → settings.json.
   const settings = readSettings(settingsPath);
   if (settings === null) { warn(`  ${settingsPath} unparseable — skipping hook wiring`); results.failed.push(['claude-hooks', 'settings.json unparseable']); }
-  else {
-    backupOnce(settingsPath);
-    for (const { event, matcher, timeout } of HOOK_EVENTS) {
-      addCommandHook(settings, event, {
-        command: `"${node}" "${HOOK_DISPATCH}" ${event} "${eapConfPath}"`,
-        marker: HOOK_MARKER, matcher: matcher || undefined, timeout,
-      });
-    }
-    validateHookFields(settings, warn);
-    writeSettings(settingsPath, settings);
-    ok(`  [3/3] Hooks wired in ${settingsPath}: ${HOOK_EVENTS.map((h) => h.event).join(', ')}`);
+  else if (!isPlainObject(settings)) {
+    // A valid-JSON but non-object root (array / bare string / number) can't carry
+    // a hooks map. Leave it untouched rather than crash or falsely report success.
+    warn(`  ${settingsPath} is not a JSON object; leaving it untouched.`); results.failed.push(['claude-hooks', 'settings.json is not a JSON object']);
+  } else {
+    const err = tryWrite(() => {
+      backupOnce(settingsPath);
+      for (const { event, matcher, timeout } of HOOK_EVENTS) {
+        addCommandHook(settings, event, {
+          command: `"${node}" "${HOOK_DISPATCH}" ${event} "${eapConfPath}"`,
+          marker: HOOK_MARKER, matcher: matcher || undefined, timeout,
+        });
+      }
+      validateHookFields(settings, warn);
+      writeSettings(settingsPath, settings);
+    });
+    if (err) { warn(`  [3/3] Hooks write failed (${settingsPath}): ${err}`); results.failed.push(['claude-hooks', err]); }
+    else ok(`  [3/3] Hooks wired in ${settingsPath}: ${HOOK_EVENTS.map((h) => h.event).join(', ')}`);
   }
 
   // Layer flags for the dispatcher (runtime/context enable state + repo root).
-  writeSettings(eapConfPath, { root: REPO_ROOT, runtime: opts.runtime, context: opts.context, version: 1 });
+  const flagsErr = tryWrite(() => writeSettings(eapConfPath, { root: REPO_ROOT, runtime: opts.runtime, context: opts.context, version: 1 }));
+  if (flagsErr) { warn(`  layer-flags write failed (${eapConfPath}): ${flagsErr}`); results.failed.push(['claude-flags', flagsErr]); }
 
   results.installed.push('claude');
 }
@@ -396,6 +423,18 @@ function backupOnce(p) {
   if (fs.existsSync(p) && !fs.existsSync(bak)) {
     try { fs.copyFileSync(p, bak, fs.constants.COPYFILE_EXCL); } catch { /* pre-existing / symlink */ }
   }
+}
+
+// On uninstall, drop a now-empty JSON stub the installer itself created. The
+// installer writes {} into a .mcp.json / settings.json that did not exist
+// before (and backupOnce leaves NO *.eap.bak in that case). If uninstall emptied
+// it back to {} and there is no backup, the file is ours and purely a leftover
+// stub — remove it. A pre-existing (backed-up) file is always preserved, as are
+// the intentional *.eap.bak backups. Returns true if the file was removed.
+function removeInstallerCreatedEmpty(file, obj) {
+  if (!isPlainObject(obj) || Object.keys(obj).length !== 0) return false;
+  if (fs.existsSync(file + '.eap.bak')) return false; // pre-existed → keep
+  try { fs.unlinkSync(file); return true; } catch { return false; }
 }
 
 // ── Native EAP-Voice install (non-Claude AGENTS.md / SOUL.md agents) ─────────
@@ -428,13 +467,18 @@ function installVoiceNative(ctx, prov) {
     return;
   }
 
-  const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-  const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  backupOnce(target);
-  // atomicWrite (temp + rename) is symlink-safe — never write through a planted
-  // rules-file symlink, matching installClaude.
-  atomicWrite(target, next, 0o644);
+  // Guarded write: a read-only rules dir (mkdtempSync EACCES / EROFS) records a
+  // clean per-agent failure instead of aborting the whole multi-agent run.
+  const err = tryWrite(() => {
+    const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+    const next = upsertFencedBlock(existing, VOICE_BEGIN, VOICE_END, voiceBody);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    backupOnce(target);
+    // atomicWrite (temp + rename) is symlink-safe — never write through a planted
+    // rules-file symlink, matching installClaude.
+    atomicWrite(target, next, 0o644);
+  });
+  if (err) { warn(`  Voice write failed for ${prov.label} (${target}): ${err}`); results.failed.push([prov.id, err]); return; }
   ok(`  Voice rule written to ${target}`);
   results.installed.push(prov.id);
 }
@@ -506,17 +550,42 @@ function installMcpJson(ctx, prov, desc, servers) {
     return;
   }
 
-  // readSettings is JSONC-tolerant (opencode.jsonc carries $schema + a plugin
-  // array + comments); parse, MERGE our two keys, write back. Existing servers
-  // and sibling keys survive; a null return means the file is unrecoverable.
+  // readSettings is JSONC-tolerant, so an opencode.jsonc carrying // comments, a
+  // $schema, and a plugin array parses cleanly. We MERGE our two keys and write
+  // the result back with writeSettings, which re-emits via JSON.stringify: every
+  // DATA key (existing servers, $schema, plugin array, all siblings) is
+  // preserved, but the rewrite NORMALIZES the file — user comments are NOT
+  // retained (a comment-preserving JSONC writer is out of scope). A null return
+  // means the file is unrecoverable; a non-object root is left untouched.
   const cfg = readSettings(file);
   if (cfg === null) { warn(`  ${file} unparseable — skipping MCP registration`); results.failed.push([`${prov.id}-mcp`, 'mcp file unparseable']); return; }
-  if (!cfg[key] || typeof cfg[key] !== 'object' || Array.isArray(cfg[key])) cfg[key] = {};
-  for (const [name, s] of Object.entries(servers)) cfg[key][name] = mcpJsonEntry(desc.shape, s);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  backupOnce(file);
-  writeSettings(file, cfg);
+  if (!isPlainObject(cfg)) {
+    // Valid JSON but a non-object root (array / bare string / number): merging
+    // would crash (string) or silently vanish on JSON.stringify (array). Skip.
+    warn(`  ${file} is not a JSON object; leaving it untouched.`); results.failed.push([`${prov.id}-mcp`, 'mcp file is not a JSON object']); return;
+  }
+  // Note when we are about to normalize a commented/JSONC file, so the "comments
+  // are dropped on rewrite" behavior is surfaced rather than silent. Cheap+safe
+  // signal: strict JSON.parse fails (after BOM strip) only when comments/trailing
+  // commas are present, i.e. the JSONC recovery path in readSettings was used.
+  let normalizingJsonc = false;
+  if (fs.existsSync(file)) {
+    try {
+      let raw = fs.readFileSync(file, 'utf8');
+      if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+      JSON.parse(raw);
+    } catch { normalizingJsonc = true; }
+  }
+  const err = tryWrite(() => {
+    if (!isPlainObject(cfg[key])) cfg[key] = {};
+    for (const [name, s] of Object.entries(servers)) cfg[key][name] = mcpJsonEntry(desc.shape, s);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    backupOnce(file);
+    writeSettings(file, cfg);
+  });
+  if (err) { warn(`  MCP write failed (${file}): ${err}`); results.failed.push([`${prov.id}-mcp`, err]); return; }
   ok(`  MCP registered in ${file}: ${names.join(', ')}`);
+  if (normalizingJsonc) note('  note: JSONC file rewritten — all data/keys preserved, comments/formatting normalized away.');
 }
 
 // Remove the two EAP MCP registrations from a native agent (uninstall). CLI
@@ -589,11 +658,14 @@ function uninstall(ctx) {
     ok('  removed MCP servers via `claude mcp remove`');
   } else if (fs.existsSync(mcpPath)) {
     const cfg = readSettings(mcpPath);
-    if (cfg && cfg.mcpServers) {
+    if (isPlainObject(cfg) && cfg.mcpServers) {
       let removed = 0;
       for (const name of ['eap-runtime', 'eap-context']) if (cfg.mcpServers[name]) { delete cfg.mcpServers[name]; removed++; }
-      if (Object.keys(cfg.mcpServers).length === 0) delete cfg.mcpServers;
-      if (!opts.dryRun) writeSettings(mcpPath, cfg);
+      if (isPlainObject(cfg.mcpServers) && Object.keys(cfg.mcpServers).length === 0) delete cfg.mcpServers;
+      if (!opts.dryRun) {
+        // Drop a now-empty stub we created; otherwise write the trimmed config.
+        if (!removeInstallerCreatedEmpty(mcpPath, cfg)) writeSettings(mcpPath, cfg);
+      }
       ok(`  removed ${removed} MCP server entr${removed === 1 ? 'y' : 'ies'} from ${mcpPath}`);
     }
   }
@@ -604,7 +676,10 @@ function uninstall(ctx) {
     if (settings) {
       const removed = removeCommandHooks(settings, HOOK_MARKER);
       validateHookFields(settings, warn);
-      if (!opts.dryRun) writeSettings(settingsPath, settings);
+      if (!opts.dryRun) {
+        // Drop a now-empty stub we created; otherwise write the trimmed settings.
+        if (!removeInstallerCreatedEmpty(settingsPath, settings)) writeSettings(settingsPath, settings);
+      }
       ok(`  removed ${removed} EAP hook entr${removed === 1 ? 'y' : 'ies'} from ${settingsPath}`);
     }
   }
@@ -882,9 +957,18 @@ function runInstall(opts) {
       if (prov.soft) continue;
       if (!detectMatch(prov.detect)) continue;
     }
-    if (prov.wired) installClaude(ctx);
-    else if (prov.native) { installVoiceNative(ctx, prov); installMcpNative(ctx, prov); }
-    else planProvider(ctx, prov);
+    // Backstop: an unexpected throw from one provider's install (e.g. an
+    // unwritable target the guarded writes did not already catch) records a
+    // clean per-agent failure and moves on — it never aborts the whole run.
+    try {
+      if (prov.wired) installClaude(ctx);
+      else if (prov.native) { installVoiceNative(ctx, prov); installMcpNative(ctx, prov); }
+      else planProvider(ctx, prov);
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      ctx.warn(`  ${prov.label} install failed: ${msg}`);
+      ctx.results.failed.push([prov.id, msg]);
+    }
     process.stdout.write('\n');
   }
 
