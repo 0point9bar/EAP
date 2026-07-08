@@ -50,15 +50,15 @@ EAP-Lean is **concept-derived** from ponytail by Dietrich Gebert
 - the specific safety carve-outs (validation, data loss, security,
   accessibility, calibration, the one-runnable-check rule).
 
-What EAP does **not** take is any ponytail source: the rule text, the skill
-prose, and the examples here are written fresh. ponytail was cloned only to
-study its ladder and rules and re-express them faithfully in original words.
-The marker is renamed `ponytail:` → `eap-lean:`, and the switch verb is
-EAP's own `/eap lean`. This is the same clean-room posture EAP-Context takes
-toward graphify and EAP-Runtime takes toward the context-offload pattern:
-credit for the concept, zero code included. ponytail is MIT, so even a
-code-derived work would be compatible — EAP stays concept-only anyway to keep
-its "100% original / clean-room, zero third-party source" invariant intact.
+EAP-Lean's rule text, tag vocabulary, scoring strings, and worked examples are
+close adaptations of ponytail's documentation (some sentences verbatim) — a
+documentation derivative, not a clean room. What EAP does **not** take is
+ponytail's *runtime*: the hooks, mode tracker, flag file, and MCP server are
+reimplemented independently, and the marker is renamed `ponytail:` → `eap-lean:`
+with EAP's own `/eap lean` switch verb. ponytail is MIT; its copyright and
+permission notice is retained in `docs/legal/THIRD_PARTY_NOTICES.md`. (The
+genuine clean room is EAP-Runtime toward the ELv2 context-mode pattern — credit
+for the concept, zero source read; see ATTRIBUTION.md.)
 
 ## How it composes
 

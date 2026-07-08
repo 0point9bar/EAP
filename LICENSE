@@ -22,6 +22,8 @@ SOFTWARE.
 
 ---
 
-All code in this repository is original / clean-room work. No third-party
-source code is included. Concept credits (graphify, context-mode, caveman,
-TLDR, ponytail) are recorded in NOTICE and docs/legal/ATTRIBUTION.md.
+EAP has no third-party runtime dependencies and no Elastic-License (ELv2)
+source. Some documentation and helpers are MIT-licensed derivatives of upstream
+projects (ponytail, caveman/TLDR, graphify); their copyright and permission
+notices are retained in docs/legal/THIRD_PARTY_NOTICES.md, with the full record
+in NOTICE and docs/legal/ATTRIBUTION.md.

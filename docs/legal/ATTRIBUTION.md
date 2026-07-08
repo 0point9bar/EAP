@@ -22,14 +22,15 @@ design (drop the persona, keep the compression) is documented in TLDR's
   `shrink`), the `net: -N lines` scoring, the deliberate-simplification comment
   convention (renamed `ponytail:` → `eap-lean:`), and ponytail's safety
   carve-outs (understanding, input validation, data-loss error handling,
-  security, accessibility, hardware calibration, one runnable check). **Concept
-  only — no ponytail source code, prose, or examples are used;** the rule text,
-  skills, and examples are written fresh in EAP's own words. ponytail was cloned
-  solely to study its ladder and rules and re-express them faithfully. ponytail
-  is MIT, so this is licence-compatible either way; EAP stays concept-only to
-  preserve its "100% original / clean-room, zero third-party source" invariant.
-  EAP-Lean is a peer of EAP-Signal (Signal shrinks the prose; Lean shrinks the
-  code), prompt-only and always-on.
+  security, accessibility, hardware calibration, one runnable check). **EAP-Lean
+  is a documentation derivative of ponytail, not a concept-only clean room:** its
+  rule text, tag vocabulary, scoring strings, and worked examples are close
+  adaptations of ponytail's, and some sentences are verbatim. ponytail is MIT, so
+  this is fully licence-compatible; per MIT its copyright and permission notice
+  is retained in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). What EAP-Lean
+  does **not** take is ponytail's runtime (hooks, mode tracker, MCP server) — that
+  is reimplemented independently. EAP-Lean is a peer of EAP-Signal (Signal shrinks
+  the prose; Lean shrinks the code), prompt-only and always-on.
 
 ## EAP-Context (input / retrieval)
 
@@ -79,9 +80,11 @@ ELv2 identifiers (`context-mode`, `mksglu`, `Koseoglu`/`Köseoğlu`, `Elastic-2.
 
 ## Summary
 
-EAP ships **MIT**, **sole copyright holder for 100% of the code** — every layer
-is original or clean-room, with **no third-party source code included** and
-**no third-party runtime dependencies**. Upstream projects are credited for
-concepts only (graphify, context-mode, caveman, TLDR, ponytail). Fully
-relicensable, zero copyleft, zero ELv2 contamination, zero upstream coupling,
-zero supply-chain surface.
+EAP ships **MIT** with **no third-party runtime dependencies** and **no ELv2
+(context-mode) source** — a genuine clean room for the one non-OSS upstream.
+Its code is original except where noted: EAP-Signal's prompt descends from TLDR
+/ caveman (MIT), EAP-Lean's rule text and skills are a documentation derivative
+of ponytail (MIT), and EAP-Context borrows graphify's `_trigrams` helper and
+provenance vocabulary (MIT). All three upstream MIT notices are retained in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Zero copyleft, zero ELv2
+contamination, zero supply-chain surface.

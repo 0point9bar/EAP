@@ -6,10 +6,13 @@ Licensed under the MIT License (see LICENSE).
 Provenance
 ================================================================================
 
-All source code in this repository is original / clean-room work by the EAP
-maintainer. NO third-party source code is included or vendored.
+EAP has no third-party runtime dependencies and no Elastic-License (ELv2)
+source. Most code is original; some documentation and helpers are MIT-licensed
+derivatives of the upstream projects below, whose copyright and permission
+notices are retained verbatim in docs/legal/THIRD_PARTY_NOTICES.md.
 
-The following projects are credited for CONCEPTS and design (no code taken):
+The following projects are credited (concepts, and — where marked — MIT
+documentation/code derivatives whose notices are retained):
 
   * graphify  — https://github.com/Graphify-Labs/graphify  — MIT
     EAP-Context is an independent, standard-library-only symbol-graph engine
