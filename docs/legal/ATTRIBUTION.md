@@ -1,14 +1,14 @@
 # Attribution & Provenance
 
 **EAP** (Efficient Agent Protocol) is an independent, MIT-licensed project
-maintained solely by [jqbit](https://github.com/jqbit). It is a self-contained
+maintained solely by [ZeroPointNineBar](https://github.com/ZeroPointNineBar). It is a self-contained
 hard fork/freeze with no upstream runtime dependency. This file records the
 lineage of every idea and every line of third-party code, per layer.
 
 ## EAP-Signal (output compression)
 
-Descends from **TLDR** (jqbit, MIT), which itself derives — with attribution —
-from **caveman** by Julius Brussee (MIT) and jqbit's earlier TAUT→STFU→blunt
+Descends from **TLDR** (ZeroPointNineBar, MIT), which itself derives — with attribution —
+from **caveman** by Julius Brussee (MIT) and ZeroPointNineBar's earlier TAUT→STFU→blunt
 prompt lineage. The "compress like a caveman, sound like a senior engineer"
 design (drop the persona, keep the compression) is documented in TLDR's
 `data/philosophy.md`. All of this lineage is MIT and libre-compatible.

@@ -1,5 +1,5 @@
 EAP — Efficient Agent Protocol
-Copyright (c) 2026 jqbit
+Copyright (c) 2026 ZeroPointNineBar
 Licensed under the MIT License (see LICENSE).
 
 ================================================================================
@@ -22,7 +22,7 @@ The following projects are credited for CONCEPTS and design (no code taken):
     context-offload pattern (also seen in OpenAI Code Interpreter and
     Anthropic's "code execution with MCP"). It contains NO context-mode source.
 
-  * caveman (MIT, Julius Brussee), TLDR (MIT, jqbit), ponytail (MIT, Dietrich
+  * caveman (MIT, Julius Brussee), TLDR (MIT, ZeroPointNineBar), ponytail (MIT, Dietrich
     Gebert) — EAP-Signal descends from TLDR (which credits caveman); ponytail's
     code-brevity concept is an optional Signal sub-mode. No ponytail code taken.
 
