@@ -147,19 +147,30 @@ export class RuntimeStore {
   index(source, content, { createdAt = 0 } = {}) {
     const body = String(content);
     const id = this._id(source, body);
-    const existing = this.db.prepare('SELECT id, chunk_count, bytes FROM docs WHERE id = ?').get(id);
-    if (existing) {
-      return { id, source, bytes: existing.bytes, chunks: existing.chunk_count, deduped: true };
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      // Re-check only after taking the write lock: another process may have
+      // indexed the same deterministic document while this process waited.
+      const existing = this.db.prepare('SELECT id, chunk_count, bytes FROM docs WHERE id = ?').get(id);
+      if (existing) {
+        this.db.exec('COMMIT');
+        return { id, source, bytes: existing.bytes, chunks: existing.chunk_count, deduped: true };
+      }
+      const parts = chunk(body);
+      const bytes = Buffer.byteLength(body);
+      const insDoc = this.db.prepare(
+        'INSERT INTO docs (id, source, bytes, chunk_count, created_at) VALUES (?, ?, ?, ?, ?)'
+      );
+      const insChunk = this.db.prepare('INSERT INTO chunks (doc_id, idx, body) VALUES (?, ?, ?)');
+      const insTri = this.db.prepare('INSERT INTO chunks_tri (doc_id, idx, body) VALUES (?, ?, ?)');
+      insDoc.run(id, source, bytes, parts.length, createdAt);
+      parts.forEach((p, i) => { insChunk.run(id, i, p); insTri.run(id, i, p); });
+      this.db.exec('COMMIT');
+      return { id, source, bytes, chunks: parts.length, deduped: false };
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } catch { /* transaction already closed */ }
+      throw error;
     }
-    const parts = chunk(body);
-    const insDoc = this.db.prepare(
-      'INSERT INTO docs (id, source, bytes, chunk_count, created_at) VALUES (?, ?, ?, ?, ?)'
-    );
-    const insChunk = this.db.prepare('INSERT INTO chunks (doc_id, idx, body) VALUES (?, ?, ?)');
-    const insTri = this.db.prepare('INSERT INTO chunks_tri (doc_id, idx, body) VALUES (?, ?, ?)');
-    insDoc.run(id, source, Buffer.byteLength(body), parts.length, createdAt);
-    parts.forEach((p, i) => { insChunk.run(id, i, p); insTri.run(id, i, p); });
-    return { id, source, bytes: Buffer.byteLength(body), chunks: parts.length, deduped: false };
   }
 
   // Run one FTS table's ranked query, returning [{doc_id, idx, body, snip}] best

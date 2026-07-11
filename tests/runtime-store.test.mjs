@@ -2,12 +2,43 @@
 // Run: node --test tests/runtime-store.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   RuntimeStore, chunk, OFFLOAD_THRESHOLD_BYTES, probeSqlite, tokenize, STOPWORDS,
 } from '../layers/eap-runtime/src/store.mjs';
+
+test('concurrent processes can initialize the same on-disk store', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eap-store-concurrency-'));
+  const db = join(dir, 'store.db');
+  const moduleUrl = new URL('../layers/eap-runtime/src/store.mjs', import.meta.url).href;
+  const childCode = `
+    import { RuntimeStore } from ${JSON.stringify(moduleUrl)};
+    const db = process.argv[1];
+    await new Promise(resolve => setTimeout(resolve, 100));
+    for (let i = 0; i < 10; i++) {
+      const store = new RuntimeStore(db);
+      store.index('worker-' + process.pid + '-' + i, 'payload-' + i);
+      store.close();
+    }
+  `;
+  try {
+    const exits = await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve) => {
+      const child = spawn(process.execPath, ['--input-type=module', '--eval', childCode, db], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      child.on('exit', code => resolve({ code, stderr }));
+    })));
+    assert.deepEqual(exits.filter(x => x.code !== 0), [], JSON.stringify(exits, null, 2));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('chunk packs small paragraphs and caps oversized ones', () => {
   // Small paragraphs pack together up to maxChars (fewer, denser FTS rows).

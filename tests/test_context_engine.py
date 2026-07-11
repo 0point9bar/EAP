@@ -449,7 +449,13 @@ class ContextEngineTest(unittest.TestCase):
         self.assertLess(time.perf_counter() - start, 0.3,
                         "JS function-def regex is super-linear (ReDoS)")
         # same-line-spaces variant: many wide lines must not hang either.
-        s2 = "\n".join(["function" + " " * 1999 for _ in range(400)])
+        # Keep each line UNDER MAX_LINE_BYTES so _scannable does not neutralize
+        # them into pure-space runs (which would make this assertion vacuous and
+        # measure neutralization + space-scanning cost instead of the function
+        # regex). "function" is 8 chars; leave headroom under the 2000-byte cap.
+        spaces = extract.MAX_LINE_BYTES - 20  # 1980
+        s2 = "\n".join(["function" + " " * spaces for _ in range(400)])
+        self.assertEqual(extract._scannable(s2), s2)
         start = time.perf_counter()
         extract._extract_js(s2, "t.js")
         self.assertLess(time.perf_counter() - start, 0.3)
