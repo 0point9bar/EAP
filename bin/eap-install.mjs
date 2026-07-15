@@ -168,7 +168,18 @@ const PROVIDERS = [
       skills: '$HOME/.grok/skills',
       mcp: { kind: 'cli-dashdash', bin: 'grok' },
     } },
-  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor||macapp:Cursor', native: {
+  // oh-my-pi: loads a user-scope AGENTS.md and auto-discovers skills + mcp.json
+  // from its agent dir. Default dir ~/.omp/agent (profile-scoped to
+  // ~/.omp/profiles/<name>/agent only when OMP_PROFILE/PI_PROFILE is set).
+  { id: 'omp',        label: 'oh-my-pi',           detect: 'command:omp', native: {
+      signal: '$HOME/.omp/agent/AGENTS.md',
+      skills: '$HOME/.omp/agent/skills',
+      mcp: { kind: 'json', file: '$HOME/.omp/agent/mcp.json', key: 'mcpServers', shape: 'command-args' },
+    } },
+  // Cursor has no GLOBAL always-on rules file: ~/.cursor/rules/*.mdc (alwaysApply)
+  // only takes effect when cwd is $HOME or a repo carrying its own .cursor/rules.
+  // For real repos, run `eap-signal-init` (per-repo rule). Detect cursor-agent too.
+  { id: 'cursor',     label: 'Cursor',             detect: 'command:cursor-agent||command:cursor||macapp:Cursor', native: {
       signal: '$HOME/.cursor/rules/eap.mdc',
       frontmatter: '---\ndescription: "EAP — Signal (verdict-first) + Lean (minimal-code)"\nalwaysApply: true\n---\n\n',
       skills: '$HOME/.cursor/skills',
@@ -502,7 +513,32 @@ function copyDirRecursive(src, dest) {
   }
 }
 
-function installAgentsInto(destDir, opts) {
+// Strip Claude-only agent frontmatter (`tools:` as a YAML array, `model:`) when
+// writing eapcrew agents into a non-Claude host like opencode. opencode rejects
+// the YAML-array `tools:` form — one such file makes the WHOLE config invalid,
+// so no MCP/skills/agents load at all — and it cannot resolve Anthropic model
+// aliases such as `haiku`. Omitting both lets opencode fall back to its defaults
+// while the agent prompt body still self-restricts. Mirrors TLDR's
+// bin/lib/opencode-agent.js. Claude keeps the array + model (it honors both).
+function stripClaudeAgentFrontmatter(content) {
+  const FENCE = '---\n';
+  if (typeof content !== 'string' || !content.startsWith(FENCE)) return content;
+  const fmEnd = content.indexOf('\n---', FENCE.length);
+  if (fmEnd < 0) return content;
+  const fm = content.slice(FENCE.length, fmEnd);
+  const rest = content.slice(fmEnd);
+  const DROP = /^(tools|model)[ \t]*:/;
+  const out = [];
+  let dropping = false;
+  for (const line of fm.split('\n')) {
+    if (dropping) { if (/^[ \t]/.test(line)) continue; dropping = false; }
+    if (DROP.test(line)) { dropping = true; continue; }
+    out.push(line);
+  }
+  return FENCE + out.join('\n') + rest;
+}
+
+function installAgentsInto(destDir, opts, transform) {
   try {
     if (!fs.existsSync(SIGNAL_AGENTS_SRC)) return null;
     if (opts.dryRun) return null;
@@ -510,7 +546,9 @@ function installAgentsInto(destDir, opts) {
     for (const name of SIGNAL_AGENTS) {
       const src = path.join(SIGNAL_AGENTS_SRC, name);
       if (!fs.existsSync(src)) continue;
-      atomicWrite(path.join(destDir, name), fs.readFileSync(src, 'utf8'), 0o644);
+      let text = fs.readFileSync(src, 'utf8');
+      if (transform) text = transform(text);
+      atomicWrite(path.join(destDir, name), text, 0o644);
     }
     return null;
   } catch (e) { return e.message; }
@@ -832,7 +870,9 @@ function installNativeAssets(ctx, prov) {
     const dest = resolveSentinelPath(n.agents);
     if (opts.dryRun) note(`  agents: copy eapcrew into ${dest}/`);
     else {
-      const err = installAgentsInto(dest, opts);
+      // Native hosts that take eapcrew subagents (opencode) need the Claude-only
+      // `tools:`/`model:` frontmatter stripped or their config load breaks.
+      const err = installAgentsInto(dest, opts, stripClaudeAgentFrontmatter);
       if (err) warn(`  agents failed (${dest}): ${err}`);
       else ok(`  agents → ${dest}`);
     }
